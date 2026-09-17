@@ -61,6 +61,7 @@ fi
 # redirecioná-lo movia o guard sem mover quem escreve de fato. Agora o writer é
 # nosso (capture.py, chamado abaixo), então honrá-la é honesto.
 SESSION_DIR="${OMASESSION_SESSION_DIR:-$HOME/.local/share/omasession/sessions}"
+STATE_DIR="${OMASESSION_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/omasession}"
 NAME="${1:-last}"
 TOML="$SESSION_DIR/$NAME.toml"
 SIDECAR="$SESSION_DIR/$NAME.titles.json"
@@ -159,6 +160,41 @@ fi
 if ! clients="$(timeout --kill-after=5 15 hyprctl clients -j 2>/dev/null)" || [[ -z "$clients" ]]; then
     err "cannot read hyprctl clients -- session left untouched"
     exit 3
+fi
+
+# A browser restart is the one live-session transition that cannot wait for a
+# reboot restore: Chromium reopens its windows on the current workspace. The
+# repair runs under this same lock, before capture, and only moves windows that
+# already exist. A pending repair refuses this tick so the good pre-restart
+# snapshot remains available for the next pass; publishing the flattened
+# layout would erase the destinations we need to restore.
+if [[ "$NAME" == "last" && "${OMASESSION_BROWSER_REPAIR:-true}" != "false" ]]; then
+    repair_rc=0
+    # Four supported browser classes may be observed in one tick. Each changed
+    # instance gets a bounded eight-second title window, and each compositor
+    # reread has its own short timeout; the outer budget is deliberately larger
+    # than that sum so pending state can be published instead of being killed
+    # before the helper persists it.
+    if timeout --kill-after=5 90 python3 "${BASH_SOURCE[0]%/*}/browser_repair.py" \
+            "$TOML" "$STATE_DIR" <<<"$clients"; then
+        :
+    else
+        repair_rc=$?
+    fi
+    if (( repair_rc == 3 )); then
+        err "browser placement repair pending -- session left untouched"
+        exit 3
+    fi
+    if (( repair_rc != 0 )); then
+        err "browser placement repair failed -- session left untouched"
+        exit 3
+    fi
+    # The helper may have moved windows. Capture a fresh, coherent screen so
+    # the saved workspace/monitor pair describes the post-repair positions.
+    if ! clients="$(timeout --kill-after=5 15 hyprctl clients -j 2>/dev/null)" || [[ -z "$clients" ]]; then
+        err "cannot reread hyprctl clients after browser repair -- session left untouched"
+        exit 3
+    fi
 fi
 
 # Special workspaces (scratchpad) have negative ids and are excluded here, as

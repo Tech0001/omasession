@@ -3,6 +3,7 @@
 #
 #   omasession save [name]        capture the session (guarded)
 #   omasession restore [name]     replay it into the compositor
+#   omasession restore-browser [app]  move an existing browser's windows
 #                                 (--if-enabled: só se restoreOnLogin estiver on)
 #   omasession status [--json]    what was captured, when, and what is wrong
 #   omasession resolve [--json]   which command each open window resolves to
@@ -165,6 +166,7 @@ esac
 DEFAULT_SAVE_INTERVAL=30
 DEFAULT_RESTORE_ON_LOGIN=true
 DEFAULT_BROWSER_RESTORE=true
+DEFAULT_BROWSER_REPAIR=true
 
 config_get() { # config_get <key> <default> [raw_json]
     # $3, quando dado, poupa uma leitura de config.json que quem chama já fez
@@ -208,9 +210,11 @@ hypr_env() {
 
 # ── save ─────────────────────────────────────────────────────────────────────
 cmd_save() {
-    local name="${1:-last}" out rc
+    local name="${1:-last}" out rc repair
+    repair="$(config_get browserRepair "$DEFAULT_BROWSER_REPAIR")"
     set +e
-    out="$("$LIB/session-save.sh" "$name" 2>&1)"; rc=$?
+    out="$(OMASESSION_BROWSER_REPAIR="$repair" OMASESSION_STATE_DIR="$STATE_DIR" \
+        "$LIB/session-save.sh" "$name" 2>&1)"; rc=$?
     set -e
     printf '%s\n' "$out"
 
@@ -277,6 +281,53 @@ cmd_restore() {
         err "browserRestore=false ainda nao e respeitado; os browsers vao reabrir suas janelas"
     fi
     exec python3 "$LIB/replay.py" "$SESSION_DIR/$name.toml"
+}
+
+# ── restore-browser ─────────────────────────────────────────────────────────
+# This is the explicit, app-only action exposed by the panel's small Chrome
+# button. It deliberately shares the last-session lock with save/restore: a
+# manual move must not race the snapshot that supplies its destinations.
+cmd_restore_browser() {
+    local app="${1:-google-chrome}"
+    case "$app" in
+        chromium|google-chrome|brave-browser|vivaldi-stable) ;;
+        *) die "unsupported browser class: $app" ;;
+    esac
+    hypr_env || die "no Hyprland instance -- nothing to restore into"
+    [[ -f "$SESSION_DIR/last.toml" ]] || die "no saved session at $SESSION_DIR/last.toml"
+
+    # Reuse safe_fs' descriptor-preserving lock wrapper, the same boundary as
+    # session-save.sh. Re-entering this command with fd 9 already open means
+    # the child can prove it owns the lock without trusting an environment
+    # variable or reopening the path after a check.
+    if ! : 2>/dev/null >&9; then
+        exec /usr/bin/python3 "$LIB/safe_fs.py" exec-with-lock \
+            "$SESSION_DIR" ".last.lock" 9 -- bash "${BASH_SOURCE[0]}" \
+            restore-browser "$app"
+    fi
+    if ! flock -n 9; then
+        die "another save or restore is already running"
+    fi
+
+    local clients rc repair_output detail
+    if ! clients="$(timeout --kill-after=5 15 hyprctl clients -j 2>/dev/null)" \
+        || [[ -z "$clients" ]]; then
+        die "cannot read hyprctl clients -- browser placement unchanged"
+    fi
+
+    if repair_output="$(timeout --kill-after=5 90 python3 "$LIB/browser_repair.py" \
+        "$SESSION_DIR/last.toml" "$STATE_DIR" --manual --app "$app" \
+        <<<"$clients" 2>&1)"; then
+        printf '%s\n' "$repair_output"
+    else
+        rc=$?
+        printf '%s\n' "$repair_output"
+        detail="$(printf '%s\n' "$repair_output" | tail -n 1)"
+        if (( rc == 3 )); then
+            die "browser placement repair was incomplete: ${detail:-no detail} -- saved snapshot unchanged"
+        fi
+        die "browser placement repair failed (rc=$rc): ${detail:-no detail} -- saved snapshot unchanged"
+    fi
 }
 
 # ── status ───────────────────────────────────────────────────────────────────
@@ -358,10 +409,12 @@ status_json() {
         --argjson workspaces "${workspaces:-0}" \
         --argjson intervalSec "$(config_get saveIntervalSec "$DEFAULT_SAVE_INTERVAL" "$cfg_raw")" \
         --argjson restoreOnLogin "$(config_get restoreOnLogin "$DEFAULT_RESTORE_ON_LOGIN" "$cfg_raw")" \
+        --argjson browserRepair "$(config_get browserRepair "$DEFAULT_BROWSER_REPAIR" "$cfg_raw")" \
         '{windows:$windows, workspaces:$workspaces, agoSec:$agoSec,
           refused:$refused, detail:$detail,
           captured:$captured, lastSave:$lastSave, timer:$timer,
           intervalSec:$intervalSec, restoreOnLogin:$restoreOnLogin,
+          browserRepair:$browserRepair,
           session:$session, usingFallback:$fallback, notes:$notes}'
 }
 
@@ -719,7 +772,8 @@ cmd_install() {
         defaults="$(jq -n --argjson i "$DEFAULT_SAVE_INTERVAL" \
               --argjson r "$DEFAULT_RESTORE_ON_LOGIN" \
               --argjson b "$DEFAULT_BROWSER_RESTORE" \
-              '{saveIntervalSec:$i, restoreOnLogin:$r, browserRestore:$b}')" \
+              --argjson br "$DEFAULT_BROWSER_REPAIR" \
+              '{saveIntervalSec:$i, restoreOnLogin:$r, browserRestore:$b, browserRepair:$br}')" \
             || die "could not build default config"
         printf '%s\n' "$defaults" | safe_write "$CONFIG_DIR" config.json
         say "config written to $CONFIG"
@@ -882,6 +936,7 @@ usage() { sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 case "${1:-}" in
     save)      shift; cmd_save "$@" ;;
     restore)   shift; cmd_restore "$@" ;;
+    restore-browser) shift; cmd_restore_browser "$@" ;;
     status)    shift; cmd_status "$@" ;;
     resolve)   shift; cmd_resolve "$@" ;;
     install)   shift; cmd_install "$@" ;;

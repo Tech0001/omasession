@@ -21,6 +21,7 @@ thing macOS does with *"Reopen windows when logging back in"*, on Omarchy 4.
 | **tmux-aware** | A terminal attached to tmux comes back attached to the *same session*, not a bare shell in `$HOME`. |
 | **Honest about gaps** | A window with no known launch command is flagged before the reboot, in the panel — never discovered after. |
 | **Browser tabs, for real** | Arms the browser's own crash-recovery instead of scripting individual tabs — survives power loss and GPU lockups a pre-shutdown hook never could. |
+| **Browser restarts keep their desks** | When Chrome or Chromium reopens its windows during the same login, the next snapshot moves only those existing windows back to their saved workspaces. |
 | **Never a worse save** | Every snapshot is staged, validated against the screen it came from, and only then published — a save that can't prove itself never overwrites one that could. |
 
 ## Why a new plugin
@@ -65,6 +66,20 @@ the promise and the buttons above it, and the save cadence below it, stay
 fixed and reachable regardless of how much there is to list.
 
 ![Three monitors, six windows, all grouped correctly](screenshots/panel-multimonitor.png)
+
+**Browser restart placement.** The snapshot timer also keeps a small
+browser-generation record using each browser process's PID and Linux start
+time. If that generation changes, `lib/browser_repair.py` waits for the
+browser's existing titled windows, matches them one-to-one against the saved
+title sidecar, and moves them to their saved workspaces. It never launches or
+closes a window. The workspace's existing Hyprland monitor assignment carries
+the same monitor placement used by the reboot restore; it leaves the previous
+snapshot intact while a restore is still incomplete. Disable this live repair
+with:
+
+```
+$OMASESSION config set browserRepair false
+```
 
 **Never a worse save.** A session saver's worst failure isn't missing a
 save — it's overwriting a good one with a bad one. `lib/session-save.sh`
@@ -128,6 +143,7 @@ back, with **Save now** and **Restore session**. Same from the CLI:
 OMASESSION=~/.config/omarchy/plugins/brenoperucchi.omasession/bin/omasession
 $OMASESSION save              # capture now, outside the timer's own cadence
 $OMASESSION restore           # replay the last capture into the compositor
+$OMASESSION restore-browser google-chrome  # move open Chrome windows back
 $OMASESSION status --json     # what the panel itself reads
 $OMASESSION resolve           # which command each current window would resolve to
 ```
@@ -141,7 +157,13 @@ OMASESSION=~/.config/omarchy/plugins/brenoperucchi.omasession/bin/omasession
 $OMASESSION config set saveIntervalSec 30      # how often the timer snapshots
 $OMASESSION config set restoreOnLogin true     # replay automatically at login
 $OMASESSION config set browserRestore true     # let the browser reopen its own tabs
+$OMASESSION config set browserRepair true      # put reopened browser windows back
 ```
+
+The panel's small Chrome icon runs `restore-browser google-chrome`. This is an
+explicit app-only action: Chrome must already be open, and only its existing
+windows are moved to the saved workspaces. It does not launch, close, or alter
+Chrome's profile.
 
 ## Remove
 

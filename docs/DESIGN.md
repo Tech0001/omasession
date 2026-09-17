@@ -175,6 +175,39 @@ Two traps, both discovered the hard way:
   does not stop it. Without the policy, the first restore after each Chrome
   update silently loses every browser window.
 
+### 5.1 Restarting the browser inside an existing login
+
+The reboot path above is not involved when Chrome is restarted manually: the
+browser restores its windows on whichever workspace is active. The snapshot
+timer handles this live transition before its normal capture. It persists a
+browser identity as `(PID, /proc/<pid>/stat starttime)`, so a reused PID does
+not look like a restart. When the identity changes, `lib/browser_repair.py`
+waits briefly for existing titled windows, matches them one-to-one against
+the last coherent title sidecar, and dispatches only `window.move` to their
+saved workspaces. The workspace's existing Hyprland monitor assignment carries
+the same monitor placement used by the reboot restore; the helper never moves
+a monitor or an unrelated window, and never launches, closes, or edits the
+browser profile.
+
+The repair shares the save lock. While a restarted browser is still restoring
+windows, the save returns `3` and keeps the previous snapshot; once the repair
+has enough matches, the helper rereads Hyprland and the ordinary capture
+publishes the repaired positions. A fresh login or Hyprland instance resets
+the repair state and leaves the existing reboot restore unchanged. The
+`browserRepair` setting disables this path without disabling normal browser
+restore.
+
+### 5.2 Explicit Chrome repair
+
+The panel exposes a small Chrome icon next to the session actions. It calls
+`omasession restore-browser google-chrome`, which uses the same saved title
+sidecar and one-to-one matching as the automatic repair but does not require a
+new browser process generation. The command takes the last-session lock,
+validates the live window identity before each move, and confirms the resulting
+workspace. It moves only existing Chrome windows; it never launches, closes, or
+edits the browser profile. The equivalent CLI command is useful when the panel
+is closed or when a user wants to repeat the action manually.
+
 ### The open problem
 
 After a reboot the session files under `~/.config/<browser>/Default/Sessions/`
@@ -196,6 +229,7 @@ lib/replay.py         the replay engine (validated)
 lib/capture.py        our own hyprctl-based capture (§2)
 lib/resolve.py        the command resolver capture.py calls (docs/plans/003)
 lib/session-save.sh   capture + title sidecar + generation guard
+lib/browser_repair.py live browser restart detection and placement repair
 bin/browser-setup     lists per-vendor policy paths; the write is a manual
                        `sudo install`/`sudo rm` in the README, not a script
 systemd/              snapshot timer, pre-shutdown hook (pending)

@@ -75,6 +75,8 @@ Panel {
   property bool cliMissing: false
   property bool checking: false
   property string lastError: ""
+  property string browserRestoreOutput: ""
+  property string browserRestoreError: ""
   property var realStatus: null
 
   readonly property var status: mockMode ? mock[scenario] : realStatus
@@ -133,6 +135,29 @@ Panel {
     id: restoreProc
     command: [root.cliPath, "restore"]
     onExited: function(code) { root.refresh() }
+  }
+
+  Process {
+    id: browserRestoreProc
+    command: [root.cliPath, "restore-browser", "google-chrome"]
+    stdout: StdioCollector {
+      id: browserRestoreStdout
+      waitForEnd: true
+      onStreamFinished: root.browserRestoreOutput = String(text || "").trim()
+    }
+    stderr: StdioCollector {
+      id: browserRestoreStderr
+      waitForEnd: true
+      onStreamFinished: root.browserRestoreError = String(text || "").trim()
+    }
+    onExited: function(code) {
+      var output = String(browserRestoreStdout.text || root.browserRestoreOutput || "").trim()
+      var error = String(browserRestoreStderr.text || root.browserRestoreError || "").trim()
+      var lines = (error || output).split("\n").filter(function(line) { return line.trim() !== "" })
+      root.browserRestoreError = code === 0 ? "" : (lines.length > 0 ? lines[lines.length - 1] : "Chrome restore failed (exit " + code + ")")
+      root.browserRestoreOutput = code === 0 ? (lines.length > 0 ? lines[lines.length - 1] : "Chrome windows restored") : ""
+      root.refresh()
+    }
   }
 
   Process {
@@ -492,14 +517,50 @@ Panel {
                   text: "Save now"
                   bordered: true
                   enabled: !root.mockMode && !saveProc.running
+                           && !browserRestoreProc.running
                   onClicked: saveProc.running = true
                 }
                 Button {
                   text: "Restore session"
                   bordered: true
                   enabled: !root.mockMode && !restoreProc.running
+                           && !browserRestoreProc.running
                   onClicked: restoreProc.running = true
                 }
+
+                // Explicit app-only repair: Chrome keeps its tabs and
+                // windows, while this action puts those existing windows back
+                // on their saved workspaces. The small icon keeps this
+                // frequent action available without adding another full-width
+                // button to the panel.
+                PanelActionButton {
+                  id: chromeRestoreButton
+                  iconText: ""
+                  tooltipText: browserRestoreProc.running
+                                ? "Restoring Chrome windows…"
+                                : "Restore Chrome windows"
+                  foreground: root.fg
+                  enabled: !root.mockMode && !root.cliMissing
+                           && !browserRestoreProc.running
+                           && !restoreProc.running && !saveProc.running
+                  onClicked: {
+                    root.browserRestoreOutput = ""
+                    root.browserRestoreError = ""
+                    browserRestoreProc.running = true
+                  }
+                }
+
+              }
+
+              Text {
+                visible: root.browserRestoreOutput !== "" || root.browserRestoreError !== ""
+                width: parent.width
+                elide: Text.ElideRight
+                text: root.browserRestoreError !== ""
+                      ? root.browserRestoreError : root.browserRestoreOutput
+                color: root.browserRestoreError !== "" ? Color.urgent : root.dim
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
               }
             }
           }

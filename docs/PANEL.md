@@ -169,6 +169,12 @@ Um `Process` (`Quickshell.Io`) por operação:
   true|false`. É o único caminho de escrita, e existe porque DESIGN.md §6
   proíbe o QML de tocar em arquivo nenhum diretamente — inclusive
   `config.json`.
+- `browserRestoreProc` chama `omasession restore-browser google-chrome` pelo
+  pequeno botão com o glifo do Chrome na linha de ações. A ação é explícita e
+  app-only: exige janelas já abertas, move-as para os workspaces salvos e não
+  inicia, fecha nem altera o perfil do navegador. O `stdout`/`stderr` e o
+  código de saída ficam num resultado separado do status do último save, então
+  lock ocupado e reparo incompleto permanecem visíveis no painel.
 - Refresh dispara em três gatilhos: ao carregar (`Component.onCompleted`), ao
   abrir o painel (`onOpenedChanged`, o que importa mais — o usuário está
   olhando agora), e um `Timer` de fundo (`max(10, intervalSec)` segundos) para

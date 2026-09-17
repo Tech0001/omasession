@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "brenoperucchi.omasession",
   "name": "OmaSession",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "brenoperucchi",
   "license": "MIT",
   "description": "Reopens the windows you had open, on the workspaces they were on, after a reboot or a crash -- speaking the Lua IPC that Hyprland 0.56 actually accepts.",
@@ -21,7 +21,8 @@
     "defaults": {
       "saveIntervalSec": 30,
       "restoreOnLogin": true,
-      "browserRestore": true
+      "browserRestore": true,
+      "browserRepair": true
     },
     "schema": [
       {
@@ -45,6 +46,13 @@
         "type": "boolean",
         "label": "Let browsers reopen their own tabs",
         "description": "Launches the browser once and places the windows it reopens. Off means empty windows on the right workspaces.",
+        "defaultValue": true
+      },
+      {
+        "key": "browserRepair",
+        "type": "boolean",
+        "label": "Restore browser workspaces after a restart",
+        "description": "Moves browser windows reopened by Chrome back to their saved workspaces without relaunching them.",
         "defaultValue": true
       }
     ]
