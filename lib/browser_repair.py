@@ -442,6 +442,7 @@ def run(
     dry_run: bool,
     manual: bool = False,
     app: str | None = None,
+    skip_apps: set[str] | None = None,
 ) -> int:
     try:
         state = read_state(state_dir)
@@ -485,7 +486,10 @@ def run(
         return 3
     pending = False
     run_deadline = time.monotonic() + REPAIR_RUN_BUDGET
-    apps = [app] if app is not None else sorted(BROWSER_CLASSES)
+    skipped = skip_apps or set()
+    apps = [app] if app is not None else [
+        candidate for candidate in sorted(BROWSER_CLASSES) if candidate not in skipped
+    ]
     for candidate in apps:
         _, app_pending = process_app(
             candidate,
@@ -527,7 +531,7 @@ def main() -> int:
     if len(sys.argv) < 3:
         print(
             "usage: browser_repair.py <session.toml> <state-dir> "
-            "[--disabled|--dry-run|--manual] [--app CLASS]",
+            "[--disabled|--dry-run|--manual] [--app CLASS] [--skip-app CLASS]",
             file=sys.stderr,
         )
         return 2
@@ -536,6 +540,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--manual", action="store_true")
     parser.add_argument("--app", choices=sorted(BROWSER_CLASSES))
+    parser.add_argument("--skip-app", action="append", choices=sorted(BROWSER_CLASSES), default=[])
     try:
         args = parser.parse_args(sys.argv[3:])
     except SystemExit:
@@ -553,6 +558,7 @@ def main() -> int:
         dry_run=args.dry_run,
         manual=args.manual,
         app=args.app,
+        skip_apps=set(args.skip_app),
     )
 
 

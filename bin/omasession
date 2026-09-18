@@ -167,6 +167,7 @@ DEFAULT_SAVE_INTERVAL=30
 DEFAULT_RESTORE_ON_LOGIN=true
 DEFAULT_BROWSER_RESTORE=true
 DEFAULT_BROWSER_REPAIR=true
+DEFAULT_BROWSER_REPAIR_CHROME=true
 
 config_get() { # config_get <key> <default> [raw_json]
     # $3, quando dado, poupa uma leitura de config.json que quem chama já fez
@@ -210,10 +211,12 @@ hypr_env() {
 
 # ── save ─────────────────────────────────────────────────────────────────────
 cmd_save() {
-    local name="${1:-last}" out rc repair
+    local name="${1:-last}" out rc repair repair_chrome
     repair="$(config_get browserRepair "$DEFAULT_BROWSER_REPAIR")"
+    repair_chrome="$(config_get browserRepairChrome "$DEFAULT_BROWSER_REPAIR_CHROME")"
     set +e
-    out="$(OMASESSION_BROWSER_REPAIR="$repair" OMASESSION_STATE_DIR="$STATE_DIR" \
+    out="$(OMASESSION_BROWSER_REPAIR="$repair" \
+        OMASESSION_BROWSER_REPAIR_CHROME="$repair_chrome" OMASESSION_STATE_DIR="$STATE_DIR" \
         "$LIB/session-save.sh" "$name" 2>&1)"; rc=$?
     set -e
     printf '%s\n' "$out"
@@ -410,11 +413,12 @@ status_json() {
         --argjson intervalSec "$(config_get saveIntervalSec "$DEFAULT_SAVE_INTERVAL" "$cfg_raw")" \
         --argjson restoreOnLogin "$(config_get restoreOnLogin "$DEFAULT_RESTORE_ON_LOGIN" "$cfg_raw")" \
         --argjson browserRepair "$(config_get browserRepair "$DEFAULT_BROWSER_REPAIR" "$cfg_raw")" \
+        --argjson browserRepairChrome "$(config_get browserRepairChrome "$DEFAULT_BROWSER_REPAIR_CHROME" "$cfg_raw")" \
         '{windows:$windows, workspaces:$workspaces, agoSec:$agoSec,
           refused:$refused, detail:$detail,
           captured:$captured, lastSave:$lastSave, timer:$timer,
           intervalSec:$intervalSec, restoreOnLogin:$restoreOnLogin,
-          browserRepair:$browserRepair,
+          browserRepair:$browserRepair, browserRepairChrome:$browserRepairChrome,
           session:$session, usingFallback:$fallback, notes:$notes}'
 }
 
@@ -773,7 +777,8 @@ cmd_install() {
               --argjson r "$DEFAULT_RESTORE_ON_LOGIN" \
               --argjson b "$DEFAULT_BROWSER_RESTORE" \
               --argjson br "$DEFAULT_BROWSER_REPAIR" \
-              '{saveIntervalSec:$i, restoreOnLogin:$r, browserRestore:$b, browserRepair:$br}')" \
+              --argjson brc "$DEFAULT_BROWSER_REPAIR_CHROME" \
+              '{saveIntervalSec:$i, restoreOnLogin:$r, browserRestore:$b, browserRepair:$br, browserRepairChrome:$brc}')" \
             || die "could not build default config"
         printf '%s\n' "$defaults" | safe_write "$CONFIG_DIR" config.json
         say "config written to $CONFIG"
@@ -893,6 +898,16 @@ cmd_config() {
         set)
             local key="${2:?usage: omasession config set <key> <value>}"
             local value="${3:?usage: omasession config set <key> <value>}"
+            # Serialize the whole read/modify/publish transaction. safe_write
+            # publishes each document atomically, but without this lock two
+            # concurrent config writers can both read the same old document
+            # and one silently overwrite the other's key.
+            if ! : 2>/dev/null >&9; then
+                exec /usr/bin/python3 "$SAFE_FS" exec-with-lock \
+                    "$CONFIG_DIR" ".config.lock" 9 -- bash "${BASH_SOURCE[0]}" \
+                    config set "$key" "$value"
+            fi
+            flock 9
             local current rc
             current="$(safe_read "$CONFIG_DIR" config.json)" && rc=0 || rc=$?
             (( rc == 0 || rc == 3 )) || safe_read_die "$rc" "$CONFIG"

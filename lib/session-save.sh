@@ -175,8 +175,12 @@ if [[ "$NAME" == "last" && "${OMASESSION_BROWSER_REPAIR:-true}" != "false" ]]; t
     # reread has its own short timeout; the outer budget is deliberately larger
     # than that sum so pending state can be published instead of being killed
     # before the helper persists it.
+    repair_args=()
+    if [[ "${OMASESSION_BROWSER_REPAIR_CHROME:-true}" == "false" ]]; then
+        repair_args+=(--skip-app google-chrome)
+    fi
     if timeout --kill-after=5 90 python3 "${BASH_SOURCE[0]%/*}/browser_repair.py" \
-            "$TOML" "$STATE_DIR" <<<"$clients"; then
+            "$TOML" "$STATE_DIR" "${repair_args[@]}" <<<"$clients"; then
         :
     else
         repair_rc=$?

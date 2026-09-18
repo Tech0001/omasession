@@ -81,6 +81,9 @@ with:
 $OMASESSION config set browserRepair false
 ```
 
+The panel's Chrome toggle controls `browserRepairChrome`, which can disable
+only Chrome's automatic repair while leaving the other supported browsers on.
+
 **Never a worse save.** A session saver's worst failure isn't missing a
 save — it's overwriting a good one with a bad one. `lib/session-save.sh`
 stages every save into its own generation, validates it against the screen
@@ -137,7 +140,13 @@ this.
 ## Usage
 
 The panel (bar widget) shows what was last captured and whether it can come
-back, with **Save now** and **Restore session**. Same from the CLI:
+back, with **Save now** and **Restore session**. The **Restore App Windows**
+section has a manual **Google Chrome** action and a compact toggle for
+Chrome's `browserRepairChrome` setting; turning Chrome automation off keeps
+the manual action available. The global `browserRepair` setting still acts as
+the master switch for automatic repair of every supported browser; when it is
+off, the Chrome toggle is shown disabled and explains the global block.
+Same from the CLI:
 
 ```
 OMASESSION=~/.config/omarchy/plugins/brenoperucchi.omasession/bin/omasession
@@ -158,6 +167,7 @@ $OMASESSION config set saveIntervalSec 30      # how often the timer snapshots
 $OMASESSION config set restoreOnLogin true     # replay automatically at login
 $OMASESSION config set browserRestore true     # let the browser reopen its own tabs
 $OMASESSION config set browserRepair true      # put reopened browser windows back
+$OMASESSION config set browserRepairChrome true # include Chrome in automatic repair
 ```
 
 The panel's **Google Chrome** action runs `restore-browser google-chrome`. This

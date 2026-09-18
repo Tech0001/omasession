@@ -193,20 +193,23 @@ The repair shares the save lock. While a restarted browser is still restoring
 windows, the save returns `3` and keeps the previous snapshot; once the repair
 has enough matches, the helper rereads Hyprland and the ordinary capture
 publishes the repaired positions. A fresh login or Hyprland instance resets
-the repair state and leaves the existing reboot restore unchanged. The
-`browserRepair` setting disables this path without disabling normal browser
-restore.
+the repair state and leaves the existing reboot restore unchanged.
+The global `browserRepair` setting disables this path for all supported
+browsers without disabling normal browser restore. `browserRepairChrome` can
+disable only Chrome's automatic repair while leaving the other browsers on.
 
 ### 5.2 Explicit Chrome repair
 
-The panel exposes a labeled **Google Chrome** action in a separate “Restore
-Windows from Apps” section below the session summary. It calls
+The panel exposes a labeled **Google Chrome** action in a separate “Restore App
+Windows” section below the session summary. Its compact unlabeled toggle controls
+`browserRepairChrome`; the button calls
 `omasession restore-browser google-chrome`, which uses the same saved title
 sidecar and one-to-one matching as the automatic repair but does not require a
 new browser process generation. The command takes the last-session lock,
 validates the live window identity before each move, and confirms the resulting
 workspace. It moves only existing Chrome windows; it never launches, closes, or
-edits the browser profile. The equivalent CLI command is useful when the panel
+edits the browser profile. When the global `browserRepair` master is off, the
+panel leaves this toggle disabled and explains the block. The equivalent CLI command is useful when the panel
 is closed or when a user wants to repeat the action manually.
 
 ### The open problem

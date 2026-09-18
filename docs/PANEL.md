@@ -37,12 +37,15 @@ sem criar abas internas:
    toggle.
 2. Um único corpo rolável mostra o resumo do snapshot (`All N come back`, a
    régua, workspaces/monitores e horário), `Save now`/`Restore session`, os
-   avisos, a seção **Restore Windows from Apps** e a seção **Restore Windows on
+   avisos, a seção **Restore App Windows** e a seção **Restore Windows on
    Restart**.
-3. A seção de aplicativos tem um botão identificado para **Google Chrome** e
-   mostra o resultado da ação logo abaixo. O texto explica que a ação move
-   somente janelas abertas para os workspaces salvos; ela não relança nem
-   fecha o navegador.
+3. A seção de aplicativos tem um card para **Google Chrome**, com um toggle
+   compacto sem legenda à esquerda, ligado a `browserRepairChrome`. O botão
+   move somente janelas abertas para os workspaces salvos; o toggle controla a
+   correção automática depois que o próprio Chrome reinicia. Se o interruptor
+   mestre global `browserRepair` estiver desligado, o controle fica desativado
+   e informa esse bloqueio. O resultado da ação aparece logo abaixo e a
+   automação desligada não remove o botão manual.
 4. A cadência (`Snapshot every Ns`) fica no rodapé fixo e compacto.
 
 O corpo único evita scrolls aninhados: em telas pequenas, resumo, ação do
@@ -184,8 +187,8 @@ Ficam registradas porque nenhuma dá erro visível — dão layout errado em sil
 - **Não existe `Color.error` nem `Color.warning`.** A paleta é
   `foreground` / `background` / `accent` / `urgent` / `muted`.
 - `PanelHero.detail` vira um **badge à direita**, e um texto longo ali elide o
-  `title` para `…`. Por isso o detalhe da recusa vive no banner, e o badge só
-  diz `refused`.
+  `title` para `…`. O cabeçalho atual não usa esse badge: ele mostra a versão
+  do plugin como texto discreto ao lado de `OmaSession`.
 
 ## Como a integração real funciona
 
@@ -199,17 +202,21 @@ Um `Process` (`Quickshell.Io`) por operação:
   (fire-and-forget); os dois chamam `root.refresh()` no `onExited`,
   **independente do código de saída** — a recusa do guard é dado a mostrar no
   banner, não motivo para esconder o resultado.
-- `configProc` é como o toggle escreve: `omasession config set restoreOnLogin
-  true|false`. É o único caminho de escrita, e existe porque DESIGN.md §6
+- `configProc` e `browserRepairProc` são como os toggles escrevem:
+  `omasession config set restoreOnLogin true|false` ou `omasession config set
+  browserRepairChrome true|false`. É o único caminho de escrita, e existe porque DESIGN.md §6
   proíbe o QML de tocar em arquivo nenhum diretamente — inclusive
   `config.json`.
 - `browserRestoreProc` chama `omasession restore-browser google-chrome` pelo
-  botão identificado **Google Chrome** na seção “Restore Windows from Apps”. A
-  ação é explícita e app-only: exige janelas já abertas, move-as para os
-  workspaces salvos e não inicia, fecha nem altera o perfil do navegador. O
-  `stdout`/`stderr` e o código de saída ficam num resultado logo abaixo do
-  botão, separado do status do último save, então lock ocupado e reparo
-  incompleto permanecem visíveis no painel.
+  botão identificado **Google Chrome** na seção “Restore App Windows”. O
+  toggle compacto da mesma linha grava `browserRepairChrome`; ligado, ele permite a
+  correção automática após um restart do Chrome, e desligado deixa apenas a
+  ação manual. A configuração global `browserRepair=false` continua sendo o
+  interruptor mestre para todos os navegadores suportados. A ação é explícita e app-only: exige janelas já abertas, move-as
+  para os workspaces salvos e não inicia, fecha nem altera o perfil do
+  navegador. O `stdout`/`stderr` e o código de saída ficam num resultado logo
+  abaixo do botão, separado do status do último save, então lock ocupado e
+  reparo incompleto permanecem visíveis no painel.
 - Refresh dispara em três gatilhos: ao carregar (`Component.onCompleted`), ao
   abrir o painel (`onOpenedChanged`, o que importa mais — o usuário está
   olhando agora), e um `Timer` de fundo (`max(10, intervalSec)` segundos) para

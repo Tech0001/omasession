@@ -46,11 +46,13 @@ Panel {
 
   readonly property string cliPath:
     Quickshell.env("HOME") + "/.config/omarchy/plugins/brenoperucchi.omasession/bin/omasession"
+  readonly property string pluginVersion: "0.3.0"
 
   readonly property var mock: ({
     "healthy": {
       "windows": 4, "workspaces": 4, "agoSec": 42, "refused": false, "detail": "",
-      "intervalSec": 30, "restoreOnLogin": true,
+      "intervalSec": 30, "restoreOnLogin": true, "browserRepair": true,
+      "browserRepairChrome": true,
       "captured": [
         { "ws": 1, "mon": "DP-1", "cls": "foot",                 "app": "Foot",     "title": "~/Devs/my project",  "detail": "~/Devs/my project", "warn": "", "resolvable": true },
         { "ws": 2, "mon": "DP-1", "cls": "org.gnome.Nautilus",   "app": "Files",    "title": "Home",               "detail": "", "warn": "", "resolvable": true },
@@ -61,7 +63,8 @@ Panel {
     "refused": {
       "windows": 4, "workspaces": 4, "agoSec": 214, "refused": true,
       "detail": "partial save blocked: 1 window written, 4 on screen",
-      "intervalSec": 30, "restoreOnLogin": true,
+      "intervalSec": 30, "restoreOnLogin": true, "browserRepair": true,
+      "browserRepairChrome": true,
       "captured": [
         { "ws": 1, "mon": "DP-1", "cls": "foot",                 "app": "Foot",     "title": "~/Devs/my project",  "detail": "~/Devs/my project", "warn": "", "resolvable": true },
         { "ws": 2, "mon": "DP-1", "cls": "org.gnome.Nautilus",   "app": "Files",    "title": "Home",               "detail": "", "warn": "", "resolvable": true },
@@ -73,7 +76,9 @@ Panel {
 
   // ── real status, from the CLI ─────────────────────────────────────────────
   property bool cliMissing: false
+  property var browserRepairChromeOverride: null
   property bool checking: false
+  property bool refreshQueued: false
   property string lastError: ""
   property string browserRestoreOutput: ""
   property string browserRestoreError: ""
@@ -82,7 +87,13 @@ Panel {
   readonly property var status: mockMode ? mock[scenario] : realStatus
 
   function refresh() {
-    if (mockMode || checking) return
+    if (mockMode) return
+    // A writer can finish while status --json is still being read. Queue that
+    // refresh instead of dropping it, so the final toggle state is read back.
+    if (checking) {
+      refreshQueued = true
+      return
+    }
     checking = true
     statusProc.running = true
   }
@@ -92,7 +103,6 @@ Panel {
     command: [root.cliPath, "status", "--json"]
     stdout: StdioCollector {
       onStreamFinished: {
-        root.checking = false
         var text = String(this.text).trim()
         if (text === "") return
         try {
@@ -117,6 +127,10 @@ Panel {
         // blank with no explanation.
         root.cliMissing = true
       }
+      if (root.refreshQueued) {
+        root.refreshQueued = false
+        root.refresh()
+      }
     }
   }
 
@@ -128,7 +142,9 @@ Panel {
   Process {
     id: saveProc
     command: [root.cliPath, "save"]
-    onExited: function(code) { root.refresh() }
+    onExited: function(code) {
+      root.refresh()
+    }
   }
 
   Process {
@@ -168,10 +184,25 @@ Panel {
     onExited: function(code) { root.refresh() }
   }
 
+  Process {
+    id: browserRepairProc
+    command: [root.cliPath, "config", "set", "browserRepairChrome", browserRepairValue]
+    property string browserRepairValue: "true"
+    onExited: function(code) {
+      root.browserRepairChromeOverride = null
+      root.refresh()
+    }
+  }
+
   function setRestoreOnLogin(on) {
     configProc.key = "restoreOnLogin"
     configProc.value = on ? "true" : "false"
     configProc.running = true
+  }
+
+  function setBrowserRepairChrome(on) {
+    browserRepairProc.browserRepairValue = on ? "true" : "false"
+    browserRepairProc.running = true
   }
 
   Component.onCompleted: refresh()
@@ -241,6 +272,11 @@ Panel {
   }
   readonly property var captured:      status ? status.captured : []
   readonly property bool guardRefused: status ? status.refused : false
+  readonly property bool browserRepair: status ? status.browserRepair : true
+  readonly property bool browserRepairChrome: browserRepairChromeOverride !== null
+                                             ? browserRepairChromeOverride
+                                             : (status && status.browserRepairChrome !== undefined
+                                                ? status.browserRepairChrome : true)
   readonly property bool attention:    guardRefused
 
   readonly property color fg: bar ? bar.foreground : Color.foreground
@@ -317,27 +353,73 @@ Panel {
           width: parent.width
           height: hero.implicitHeight
 
-          PanelHero {
+          Item {
             id: hero
             anchors.left: parent.left
             anchors.right: loginToggle.left
             anchors.rightMargin: Style.space(8)
-            title: "OmaSession"
-            meta: root.cliMissing     ? "cli not installed"
-                : !root.status        ? "nothing saved yet"
-                : root.restoreOnLogin ? "restores on next login"
-                                      : "restore on login is off"
-            foreground: root.fg
-            iconComponent: Component {
-              Item {
-                implicitWidth: Style.font.display
-                implicitHeight: Style.font.display
-                OpticalGlyph {
-                  anchors.centerIn: parent
-                  text: ""
+            implicitHeight: Math.max(heroIcon.height, heroLabels.implicitHeight)
+
+            Item {
+              id: heroIcon
+              width: Style.font.display
+              height: Style.font.display
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              OpticalGlyph {
+                anchors.centerIn: parent
+                text: ""
+                color: root.fg
+                fontSize: Style.font.display
+              }
+            }
+
+            Column {
+              id: heroLabels
+              anchors.left: heroIcon.right
+              anchors.leftMargin: Style.space(14)
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(2)
+
+              Row {
+                id: titleRow
+                width: parent.width
+                spacing: Style.space(8)
+
+                Text {
+                  text: "OmaSession"
+                  width: Math.min(implicitWidth,
+                                  Math.max(0, parent.width - versionText.implicitWidth - parent.spacing))
                   color: root.fg
-                  fontSize: Style.font.display
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.title
+                  font.bold: true
+                  elide: Text.ElideRight
                 }
+
+                Text {
+                  id: versionText
+                  text: root.pluginVersion
+                  color: root.dim
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+              }
+
+              Text {
+                width: parent.width
+                text: root.cliMissing     ? "CLI NOT INSTALLED"
+                    : !root.status        ? "NOTHING SAVED YET"
+                    : root.restoreOnLogin ? "RESTORES ON NEXT LOGIN"
+                                          : "RESTORE ON LOGIN IS OFF"
+                color: root.dim
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 1.2
+                elide: Text.ElideRight
               }
             }
           }
@@ -555,29 +637,80 @@ Panel {
                 spacing: Style.spacing.sm
 
                 Text {
-                  text: "Restore Windows from Apps"
+                  text: "Restore App Windows"
                   color: root.fg
                   font.family: Style.font.family
                   font.pixelSize: Style.font.caption
                 }
 
-                Button {
-                  id: chromeRestoreButton
+                // The manual action and the automatic browser-repair setting
+                // share one row. Turning automation off does not remove the
+                // explicit button: it only stops the background placement
+                // after Chrome itself restarts.
+                Item {
+                  id: chromeControls
                   width: parent.width
-                  text: "Google Chrome"
-                  iconText: ""
-                  tooltipText: browserRestoreProc.running
-                                ? "Restoring Chrome windows…"
-                                : "Move open Chrome windows to saved workspaces"
-                  bordered: true
-                  focusable: true
-                  enabled: !root.mockMode && !root.cliMissing
-                           && !browserRestoreProc.running
-                           && !restoreProc.running && !saveProc.running
-                  onClicked: {
-                    root.browserRestoreOutput = ""
-                    root.browserRestoreError = ""
-                    browserRestoreProc.running = true
+                  height: Math.max(chromeRestoreButton.implicitHeight,
+                                   chromeToggle.implicitHeight)
+
+                  BorderSurface {
+                    id: chromeCard
+                    anchors.fill: parent
+                    color: "transparent"
+                    borderSpec: Border.controlSpec("normal", root.fg, Color.accent)
+                    radius: Style.cornerRadius
+                  }
+
+                  Button {
+                    id: chromeRestoreButton
+                    anchors.left: chromeToggle.right
+                    anchors.right: parent.right
+                    anchors.rightMargin: Style.spacing.md
+                    anchors.leftMargin: Style.spacing.md
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Google Chrome"
+                    iconText: ""
+                    tooltipText: browserRestoreProc.running
+                                  ? "Restoring Chrome windows…"
+                                  : "Move open Chrome windows to saved workspaces"
+                    bordered: false
+                    focusable: true
+                    enabled: !root.mockMode && !root.cliMissing
+                             && !browserRestoreProc.running
+                             && !restoreProc.running && !saveProc.running
+                    onClicked: {
+                      root.browserRestoreOutput = ""
+                      root.browserRestoreError = ""
+                      browserRestoreProc.running = true
+                    }
+                  }
+
+                  ToggleSwitch {
+                    id: chromeToggle
+                    anchors.left: parent.left
+                    anchors.leftMargin: Style.spacing.sm
+                    anchors.verticalCenter: parent.verticalCenter
+                    checked: root.browserRepair && root.browserRepairChrome
+                    busy: browserRepairProc.running
+                    enabled: root.browserRepair && !browserRepairProc.running
+                    foreground: root.fg
+                    cursorRing: false
+                    onToggled: {
+                      if (root.mockMode) return
+                      var next = !root.browserRepairChrome
+                      root.browserRepairChromeOverride = next
+                      root.setBrowserRepairChrome(next)
+                    }
+
+                    PanelToolTip {
+                      visible: chromeToggle.containsMouse
+                      fontFamily: Style.font.family
+                      text: !root.browserRepair
+                            ? "Automatic browser restoration is disabled globally"
+                            : root.browserRepairChrome
+                            ? "Automatically restore Chrome windows after a browser restart"
+                            : "Automatic Chrome window restoration is off"
+                    }
                   }
                 }
 
