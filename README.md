@@ -218,6 +218,12 @@ Saved sessions under `~/.local/share/omasession/` are left alone.
 Every number above is an observation from a QEMU guest running Omarchy
 4.0.1 with Hyprland 0.56.2, not an estimate.
 
+## Related projects
+
+- [OmaBackup](https://github.com/brenoperucchi/omabackup) — backs up and
+  restores Omarchy's dotfiles and configuration, complementing OmaSession's
+  restoration of live application windows and workspaces.
+
 ## License
 
 MIT.
