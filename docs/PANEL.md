@@ -28,6 +28,35 @@ O bloco `mock` continua sendo **o contrato**: a forma que `status --json` tem
 de produzir, mantida em sincronia manual com `lib/effective.py` +
 `lib/captured.py`, que são quem de fato a produz agora.
 
+## Composição atual do painel
+
+Desde 2026-09-17 o painel separa os dois fluxos que o usuário pode restaurar,
+sem criar abas internas:
+
+1. O cabeçalho mantém `OmaSession`, o estado “restores on next login” e o
+   toggle.
+2. Um único corpo rolável mostra o resumo do snapshot (`All N come back`, a
+   régua, workspaces/monitores e horário), `Save now`/`Restore session`, os
+   avisos, a seção **Restore Windows from Apps** e a seção **Restore Windows on
+   Restart**.
+3. A seção de aplicativos tem um botão identificado para **Google Chrome** e
+   mostra o resultado da ação logo abaixo. O texto explica que a ação move
+   somente janelas abertas para os workspaces salvos; ela não relança nem
+   fecha o navegador.
+4. A cadência (`Snapshot every Ns`) fica no rodapé fixo e compacto.
+
+O corpo único evita scrolls aninhados: em telas pequenas, resumo, ação do
+Chrome, inventário e mensagens rolam juntos; cabeçalho e rodapé continuam
+visíveis. O orçamento usa o mesmo `panel.maxHeight`, `availableCardHeight` e
+insets do `KeyboardPanel`, sem calcular a altura a partir de uma coluna que
+contém o próprio `Flickable`.
+
+Em 2026-09-17 a composição foi renderizada no lab nos cenários `healthy` e
+`refused` e num cenário temporário com 28 janelas em 18 workspaces. Em todos,
+o cartão do Chrome apareceu antes do inventário, o corpo ficou recortado dentro
+da moldura e `Snapshot every Ns` permaneceu visível; o cenário temporário foi
+removido depois da captura.
+
 ## O loop de iteração
 
 1. `omarchy dev ui preview` — a `dev-gallery` renderiza os componentes reais do
@@ -100,7 +129,9 @@ sinal.
   documentado em `hyprctl output --help`, útil pra simular `DP-1`/`HDMI-A-1`
   em vez de `HEADLESS-N`) e 6 workspaces: o conteúdo que excede a altura
   disponível fica escondido no scroll, nunca vaza pra fora da borda, e o
-  rodapé "Snapshot every 30s" continua visível abaixo da lista.
+  rodapé "Snapshot every 30s" continua visível abaixo da lista. Essa foi a
+  primeira correção; a composição atual usa um único `bodyScroll` para também
+  rolar avisos, resumo e a seção de aplicativos junto com a lista.
 
   Primeira versão do fix capava a altura em `Style.space(320)` fixo -- achado
   da revisão (omasession-10): um valor em `space()` cresce com a escala de
@@ -111,9 +142,12 @@ sinal.
   `footerBlock` (os `Column` que envolvem tudo antes/depois do `Flickable`)
   são irmãos dele, não ancestrais -- então `panel.availableCardHeight -
   panel.verticalContentInset - headerBlock.implicitHeight -
-  footerBlock.implicitHeight` dá o teto real sem criar ciclo de binding (que
+  footerBlock.implicitHeight` dava o teto real sem criar ciclo de binding (que
   aconteceria se a conta usasse `column.implicitHeight`, que contém o próprio
-  `Flickable`). `qmllint Panel.qml` (instalado nesta máquina, confirmado que
+  `Flickable`). Essa descrição é da composição anterior; hoje `bodyScroll`
+  calcula o mesmo orçamento subtraindo apenas o `heroBlock` e o
+  `footerBlock`, enquanto todo o corpo fica dentro de um único scroll.
+  `qmllint Panel.qml` (instalado nesta máquina, confirmado que
   detecta erro de sintaxe de verdade antes de confiar nele) passa limpo --
   vale usar em vez de contar chaves na mão daqui pra frente.
 
@@ -170,11 +204,12 @@ Um `Process` (`Quickshell.Io`) por operação:
   proíbe o QML de tocar em arquivo nenhum diretamente — inclusive
   `config.json`.
 - `browserRestoreProc` chama `omasession restore-browser google-chrome` pelo
-  pequeno botão com o glifo do Chrome na linha de ações. A ação é explícita e
-  app-only: exige janelas já abertas, move-as para os workspaces salvos e não
-  inicia, fecha nem altera o perfil do navegador. O `stdout`/`stderr` e o
-  código de saída ficam num resultado separado do status do último save, então
-  lock ocupado e reparo incompleto permanecem visíveis no painel.
+  botão identificado **Google Chrome** na seção “Restore Windows from Apps”. A
+  ação é explícita e app-only: exige janelas já abertas, move-as para os
+  workspaces salvos e não inicia, fecha nem altera o perfil do navegador. O
+  `stdout`/`stderr` e o código de saída ficam num resultado logo abaixo do
+  botão, separado do status do último save, então lock ocupado e reparo
+  incompleto permanecem visíveis no painel.
 - Refresh dispara em três gatilhos: ao carregar (`Component.onCompleted`), ao
   abrir o painel (`onOpenedChanged`, o que importa mais — o usuário está
   olhando agora), e um `Timer` de fundo (`max(10, intervalSec)` segundos) para

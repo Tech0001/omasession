@@ -199,7 +199,8 @@ restore.
 
 ### 5.2 Explicit Chrome repair
 
-The panel exposes a small Chrome icon next to the session actions. It calls
+The panel exposes a labeled **Google Chrome** action in a separate “Restore
+Windows from Apps” section below the session summary. It calls
 `omasession restore-browser google-chrome`, which uses the same saved title
 sidecar and one-to-one matching as the automatic repair but does not require a
 new browser process generation. The command takes the last-session lock,

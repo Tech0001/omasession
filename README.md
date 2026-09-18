@@ -61,9 +61,9 @@ Chromium and Chrome. Full result and the six ruled-out hypotheses:
 
 **Multi-monitor.** "Workspace 3" means a different desk depending on which
 screen it is on, so the panel groups windows under the monitor they were on
-first. The list scrolls on its own inside whatever room is left on screen —
-the promise and the buttons above it, and the save cadence below it, stay
-fixed and reachable regardless of how much there is to list.
+first. The panel keeps the app and restart sections in one clipped body scroll,
+so messages and long window inventories remain reachable on short screens while
+the compact header and save cadence stay visible.
 
 ![Three monitors, six windows, all grouped correctly](screenshots/panel-multimonitor.png)
 
@@ -160,10 +160,10 @@ $OMASESSION config set browserRestore true     # let the browser reopen its own 
 $OMASESSION config set browserRepair true      # put reopened browser windows back
 ```
 
-The panel's small Chrome icon runs `restore-browser google-chrome`. This is an
-explicit app-only action: Chrome must already be open, and only its existing
-windows are moved to the saved workspaces. It does not launch, close, or alter
-Chrome's profile.
+The panel's **Google Chrome** action runs `restore-browser google-chrome`. This
+is an explicit app-only action: Chrome must already be open, and only its
+existing windows are moved to the saved workspaces. It does not launch, close,
+or alter Chrome's profile.
 
 ## Remove
 
