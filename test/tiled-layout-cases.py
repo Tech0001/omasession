@@ -102,6 +102,17 @@ class Reconstruction(unittest.TestCase):
                 for addr in ("0xa", "0xb", "0xf"):
                     self.assertIn(P.lua("address:" + addr), cleanup)
 
+    def test_cleanup_failure_after_good_reconstruction_is_not_a_failed_restore(self):
+        """A cleanup dispatcher that fails must not condemn a verified layout.
+
+        The pre-restore focused window can be gone by the time focus is handed
+        back. That focus dispatch fails, but the tiles are already correct and
+        verified, so the workspace is restored -- with a warning, not a failure.
+        """
+        self.hypr.return_value = T.SUCCESS + "; cleanup: focus window not found"
+        result = self.run_restore()
+        self.assertEqual((result.restored, result.skipped, result.failed), (2, 0, 0))
+
     def test_raised_timeout_and_cleanup_failure_do_not_abort_other_work(self):
         self.hypr.side_effect = [subprocess.TimeoutExpired("hyprctl", 15), OSError("disconnected")]
         result = self.run_restore()

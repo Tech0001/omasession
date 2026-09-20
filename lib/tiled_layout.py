@@ -14,6 +14,7 @@ import time
 
 TOLERANCE = 3
 SUCCESS = "omasession-layout-ok"
+CLEANUP_NOTE = "; cleanup: "
 IPC_ERRORS = (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError)
 
 
@@ -99,18 +100,40 @@ def tree_commands(tree, encode):
 
 
 def checked_script(commands, cleanup=()):
-    """Check every dispatch and attempt every cleanup even after a failure."""
+    """Check every dispatch and attempt every cleanup even after a failure.
+
+    A failing cleanup dispatch is reported, but never turns a reconstruction
+    that succeeded into a failure: the window that held focus before the
+    restore may legitimately be gone by the time focus is handed back, and the
+    tiles are already correct at that point.
+    """
     body = "; ".join(f"run({command})" for command in commands)
     final = "; ".join(
         f"do local good, why = pcall(function() run({command}) end); "
-        "if not good then ok = false; err = tostring(err or '') .. '; ' .. tostring(why) end end"
+        "if not good then cerr = cerr .. '; ' .. tostring(why) end end"
         for command in cleanup)
     return (
         "local function run(d) local r = hl.dispatch(d); "
         "if not r or not r.ok then error(r and r.error or 'dispatcher failed') end end; "
-        f"local ok, err = pcall(function() {body} end); {final}; "
-        f"if ok then return '{SUCCESS}' else return 'omasession-layout-error: ' .. tostring(err) end"
+        f"local ok, err = pcall(function() {body} end); local cerr = ''; {final}; "
+        f"if not ok then return 'omasession-layout-error: ' .. tostring(err) end; "
+        f"if cerr ~= '' then return '{SUCCESS}{CLEANUP_NOTE}' .. cerr end; "
+        f"return '{SUCCESS}'"
     )
+
+
+def confirmed(response):
+    """Split a dispatch response into success and an optional cleanup warning.
+
+    Returns the cleanup warning, or None when the cleanup was clean. Raises
+    ValueError when the reconstruction itself was not confirmed.
+    """
+    text = response.strip()
+    if text == SUCCESS:
+        return None
+    if text.startswith(SUCCESS + CLEANUP_NOTE):
+        return text[len(SUCCESS + CLEANUP_NOTE):]
+    raise ValueError(f"compositor did not confirm reconstruction: {response}")
 
 
 def projected_rects(tree, region):
@@ -222,8 +245,9 @@ def restore_tiled(specs, hypr, encode):
         cleanup.append(f'hl.dsp.cursor.move({{x={encode(cursor["x"])},y={encode(cursor["y"])}}})')
         try:
             response = hypr(checked_script(commands, cleanup))
-            if response.strip() != SUCCESS:
-                raise ValueError(f"compositor did not confirm reconstruction: {response}")
+            warning = confirmed(response)
+            if warning:
+                print(f"[layout] ws{ws}: cleanup incomplete:{warning}")
             deadline = time.monotonic() + 1.5
             while not verify(tree, ws, pad):
                 if time.monotonic() >= deadline:
