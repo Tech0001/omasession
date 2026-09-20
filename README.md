@@ -218,6 +218,8 @@ Saved sessions under `~/.local/share/omasession/` are left alone.
 
 ## Docs
 
+- [`CHANGELOG.md`](CHANGELOG.md) — release history and user-visible changes.
+- [GitHub Releases](https://github.com/brenoperucchi/omasession/releases) — tagged release notes.
 - [`docs/DESIGN.md`](docs/DESIGN.md) — what was measured, what it forced.
 - [`docs/PANEL.md`](docs/PANEL.md) — the panel's states and the Omarchy
   shell traps that cost the most.
