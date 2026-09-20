@@ -202,15 +202,30 @@ disable only Chrome's automatic repair while leaving the other browsers on.
 
 The panel exposes a labeled **Google Chrome** action in a separate “Restore App
 Windows” section below the session summary. Its compact unlabeled toggle controls
-`browserRepairChrome`; the button calls
-`omasession restore-browser google-chrome`, which uses the same saved title
-sidecar and one-to-one matching as the automatic repair but does not require a
-new browser process generation. The command takes the last-session lock,
-validates the live window identity before each move, and confirms the resulting
-workspace. It moves only existing Chrome windows; it never launches, closes, or
-edits the browser profile. When the global `browserRepair` master is off, the
-panel leaves this toggle disabled and explains the block. The equivalent CLI command is useful when the panel
-is closed or when a user wants to repeat the action manually.
+`browserRepairChrome`; the button calls `omasession restore-app google-chrome`,
+which filters the saved replay to Chrome, asks Chrome to restore its own windows
+and tabs, and then applies the saved workspace placement. When Chrome is already
+running, the replay preserves its current windows; `restore-browser
+google-chrome` remains the explicit repair command for moving those existing
+windows without launching a new session. The native `restore-app` path may
+prepare the stopped profile's guarded restore metadata before launching it;
+the live profile is never rewritten. When the global
+`browserRepair` master is off, or when the plugin CLI is unavailable, the panel
+leaves this toggle disabled and explains the block. The equivalent CLI commands
+are useful when the panel is closed or when a user wants to repeat the action
+manually.
+
+### 5.3 Explicit app restoration
+
+The panel keeps Chrome and Ghostty as separate app cards. The
+restore-app google-chrome command filters the saved replay to Chrome and keeps
+Chrome's native tab restoration in the loop; restore-app ghostty filters the
+saved session to Ghostty and runs the normal replay path, so an existing
+terminal is adopted or a saved command is launched. appRestoreGhostty controls
+whether Ghostty participates in the full login/session restore; the manual
+action remains available when that toggle is off. status --json reports
+executable availability separately from snapshot membership, so closing an
+installed app does not make its control disappear.
 
 ### The open problem
 

@@ -47,7 +47,7 @@ def toml_str(s: str) -> str:
             out.append("\\n")
         elif ch == "\t":
             out.append("\\t")
-        elif ord(ch) < 0x20:
+        elif ord(ch) < 0x20 or ord(ch) == 0x7f:
             out.append(f"\\u{ord(ch):04x}")
         else:
             out.append(ch)
@@ -92,6 +92,7 @@ def capture(name: str = "last", clients: object | None = None) -> str:
 
         fields = {
             "app_id": klass,
+            "title": c.get("title", ""),
             "launch_cmd": cmd,
             "workspace": str(c["workspace"]["id"]),
             "monitor": next((m["name"] for m in monitors if m.get("id") == c.get("monitor")), None),

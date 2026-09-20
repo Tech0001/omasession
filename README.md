@@ -141,18 +141,23 @@ this.
 
 The panel (bar widget) shows what was last captured and whether it can come
 back, with **Save now** and **Restore session**. The **Restore App Windows**
-section has a manual **Google Chrome** action and a compact toggle for
-Chrome's `browserRepairChrome` setting; turning Chrome automation off keeps
-the manual action available. The global `browserRepair` setting still acts as
-the master switch for automatic repair of every supported browser; when it is
-off, the Chrome toggle is shown disabled and explains the global block.
+section has independent Google Chrome and Ghostty cards. Each card keeps its
+toggle visible when the app is closed; the CLI reports whether the executable
+is installed and whether the current snapshot contains that app. Chrome's
+toggle controls browserRepairChrome, while Ghostty's controls
+appRestoreGhostty. The global browserRepair setting still acts as the
+master switch for automatic repair of every supported browser. If the plugin
+CLI is unavailable, the app controls remain visible but disabled until it is
+installed.
 Same from the CLI:
 
 ```
 OMASESSION=~/.config/omarchy/plugins/brenoperucchi.omasession/bin/omasession
 $OMASESSION save              # capture now, outside the timer's own cadence
 $OMASESSION restore           # replay the last capture into the compositor
-$OMASESSION restore-browser google-chrome  # move open Chrome windows back
+$OMASESSION restore-browser google-chrome  # repair already-open Chrome windows
+$OMASESSION restore-app google-chrome      # restore Chrome windows and tabs
+$OMASESSION restore-app ghostty            # restore only Ghostty windows
 $OMASESSION status --json     # what the panel itself reads
 $OMASESSION resolve           # which command each current window would resolve to
 ```
@@ -168,12 +173,16 @@ $OMASESSION config set restoreOnLogin true     # replay automatically at login
 $OMASESSION config set browserRestore true     # let the browser reopen its own tabs
 $OMASESSION config set browserRepair true      # put reopened browser windows back
 $OMASESSION config set browserRepairChrome true # include Chrome in automatic repair
+$OMASESSION config set appRestoreGhostty true  # include Ghostty on login restore
 ```
 
-The panel's **Google Chrome** action runs `restore-browser google-chrome`. This
-is an explicit app-only action: Chrome must already be open, and only its
-existing windows are moved to the saved workspaces. It does not launch, close,
-or alter Chrome's profile.
+The panel's **Google Chrome** action runs `restore-app google-chrome`, asking
+Chrome to restore its own saved windows and tabs before OmaSession places them.
+The **Ghostty** action runs `restore-app ghostty`; it can adopt an open
+terminal or launch the saved terminal command. `restore-browser google-chrome`
+remains available for repairing the workspaces of Chrome windows that are
+already open. The native Chrome path may update the stopped profile's guarded
+restore metadata before launching it; it never rewrites a live profile.
 
 ## Remove
 

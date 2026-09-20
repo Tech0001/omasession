@@ -39,13 +39,14 @@ sem criar abas internas:
    régua, workspaces/monitores e horário), `Save now`/`Restore session`, os
    avisos, a seção **Restore App Windows** e a seção **Restore Windows on
    Restart**.
-3. A seção de aplicativos tem um card para **Google Chrome**, com um toggle
-   compacto sem legenda à esquerda, ligado a `browserRepairChrome`. O botão
-   move somente janelas abertas para os workspaces salvos; o toggle controla a
-   correção automática depois que o próprio Chrome reinicia. Se o interruptor
-   mestre global `browserRepair` estiver desligado, o controle fica desativado
-   e informa esse bloqueio. O resultado da ação aparece logo abaixo e a
-   automação desligada não remove o botão manual.
+3. A seção de aplicativos tem dois cards independentes, **Google Chrome** e
+   **Ghostty**, cada um com um toggle compacto à esquerda. O Chrome grava
+   browserRepairChrome e mantém a ação manual de mover janelas abertas; o
+   Ghostty grava appRestoreGhostty e chama restore-app ghostty, adotando uma
+   janela aberta ou lançando o comando salvo. O CLI detecta se cada executável
+   está instalado e se há uma janela no snapshot; o card continua visível
+   quando o app está fechado e fica desativado se o executável não existir. O
+   resultado da última ação aparece logo abaixo.
 4. A cadência (`Snapshot every Ns`) fica no rodapé fixo e compacto.
 
 O corpo único evita scrolls aninhados: em telas pequenas, resumo, ação do
@@ -202,21 +203,22 @@ Um `Process` (`Quickshell.Io`) por operação:
   (fire-and-forget); os dois chamam `root.refresh()` no `onExited`,
   **independente do código de saída** — a recusa do guard é dado a mostrar no
   banner, não motivo para esconder o resultado.
-- `configProc` e `browserRepairProc` são como os toggles escrevem:
-  `omasession config set restoreOnLogin true|false` ou `omasession config set
-  browserRepairChrome true|false`. É o único caminho de escrita, e existe porque DESIGN.md §6
+- configProc, browserRepairProc e ghosttyRestoreConfigProc são como os toggles escrevem:
+  omasession config set restoreOnLogin true|false, browserRepairChrome
+  true|false ou appRestoreGhostty true|false. É o único caminho de escrita, e existe porque DESIGN.md §6
   proíbe o QML de tocar em arquivo nenhum diretamente — inclusive
   `config.json`.
-- `browserRestoreProc` chama `omasession restore-browser google-chrome` pelo
+- `browserRestoreProc` chama `omasession restore-app google-chrome` pelo
   botão identificado **Google Chrome** na seção “Restore App Windows”. O
-  toggle compacto da mesma linha grava `browserRepairChrome`; ligado, ele permite a
+  filtro app-only deixa o próprio Chrome restaurar as abas antes de o replay
+  mover as janelas para seus workspaces salvos. O toggle compacto da mesma linha grava `browserRepairChrome`; ligado, ele permite a
   correção automática após um restart do Chrome, e desligado deixa apenas a
   ação manual. A configuração global `browserRepair=false` continua sendo o
-  interruptor mestre para todos os navegadores suportados. A ação é explícita e app-only: exige janelas já abertas, move-as
-  para os workspaces salvos e não inicia, fecha nem altera o perfil do
-  navegador. O `stdout`/`stderr` e o código de saída ficam num resultado logo
+  interruptor mestre para todos os navegadores suportados. A ação é explícita e app-only: move as janelas para os workspaces salvos; se o Chrome estiver fechado, pode iniciá-lo e preparar somente o metadata guardado do perfil para a restauração nativa. O perfil vivo nunca é reescrito. O `stdout`/`stderr` e o código de saída ficam num resultado logo
   abaixo do botão, separado do status do último save, então lock ocupado e
   reparo incompleto permanecem visíveis no painel.
+- ghosttyRestoreProc chama omasession restore-app ghostty. O filtro app-only
+  reutiliza o replay normal e não altera o snapshot.
 - Refresh dispara em três gatilhos: ao carregar (`Component.onCompleted`), ao
   abrir o painel (`onOpenedChanged`, o que importa mais — o usuário está
   olhando agora), e um `Timer` de fundo (`max(10, intervalSec)` segundos) para
@@ -225,7 +227,9 @@ Um `Process` (`Quickshell.Io`) por operação:
 - `cliMissing` cobre a máquina onde `install` nunca rodou: em vez de "0
   windows" com cara de sessão vazia de verdade, o painel diz que o CLI não foi
   encontrado em `cliPath` e sugere `omasession install`. As duas causas têm
-  ações diferentes; só uma mensagem explícita distingue.
+  ações diferentes; só uma mensagem explícita distingue. Enquanto o CLI não
+  está disponível, os toggles e os botões de restauração também ficam
+  desabilitados para não oferecer uma ação que falharia silenciosamente.
 
 Validado round-trip no guest: `config set` disparado pelo toggle grava em
 `~/.config/omasession/config.json` de verdade (confirmado por instrumentação

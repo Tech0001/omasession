@@ -22,6 +22,7 @@ Proof-of-concept for the Omarchy session plugin, not the plugin itself.
 """
 
 import difflib
+import contextlib
 import json
 import shlex
 import re
@@ -30,16 +31,18 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from safe_fs import read_capped_path  # noqa: E402
+from resolve import skip_env_wrapper  # noqa: E402
+from safe_fs import Refused, TooLarge, open_dir_chain, read_capped_path, write_bytes  # noqa: E402
 
 SESSION = Path.home() / ".local/share/omasession/sessions/last.toml"
 WINDOW_TIMEOUT = 15.0
 BROWSER_TIMEOUT = 40.0
-BROWSER_QUIET = 4.0     # no new window for this long = the browser is done
+BROWSER_QUIET = 10.0    # allow slower profiles to finish native session restore
 SETTLE = 0.4
 
 # hl.dsp.window.fullscreen_state takes a mode, not a flag. Hyprland efb50993,
@@ -184,12 +187,12 @@ def mapped() -> list[dict]:
     return [c for c in clients() if c.get("mapped") and c["workspace"]["id"] > 0]
 
 
-def find_new(known: set[str], timeout: float):
+def find_new(known: set[str], timeout: float, app: str | None = None):
     """First mapped window whose address is not in `known`."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         for c in mapped():
-            if c["address"] not in known:
+            if c["address"] not in known and (app is None or c.get("class") == app):
                 return c
         time.sleep(POLL)
     return None
@@ -270,7 +273,7 @@ def restore(spec: dict, claimed: set[str], index: int, total: int) -> bool:
     known = {c["address"] for c in mapped()} | claimed
     dispatch("exec_cmd", f"uwsm app -- {cmd}")
 
-    win = find_new(known, WINDOW_TIMEOUT)
+    win = find_new(known, WINDOW_TIMEOUT, app)
     if win is None:
         print(f"[{index}/{total}] {app}: no window after {WINDOW_TIMEOUT:.0f}s")
         return False
@@ -307,13 +310,16 @@ def wait_for_browser(app: str, known: set[str], want: int) -> list[dict]:
     """
     deadline = time.monotonic() + BROWSER_TIMEOUT
     found: list[dict] = []
+    signature: tuple[str, ...] = ()
     last_change = time.monotonic()
     while time.monotonic() < deadline:
         current = [c for c in mapped()
                    if c["address"] not in known and c.get("class") == app]
-        if len(current) != len(found):
-            found = current
+        current_signature = tuple(sorted(c["address"] for c in current))
+        if current_signature != signature:
+            signature = current_signature
             last_change = time.monotonic()
+        found = current
         real = [w for w in found if not is_blank_tab(w.get("title", ""))]
         if len(real) >= want:
             return found
@@ -373,6 +379,36 @@ def take_best_match(title: str, candidates: list[dict]) -> dict | None:
     if best_i is not None and best_score >= 0.6:
         return candidates.pop(best_i)
     return None
+
+
+def plan_browser_matches(windows: list[dict], candidates: list[dict]):
+    """Reserve every exact title before using approximate matches.
+
+    Browser windows share one class, PID and command line, so title is the
+    only useful key. Approximate matching is useful while a page is loading,
+    but it must not consume a title that another window matches exactly.
+    """
+    available = list(candidates)
+    exact: dict[int, dict] = {}
+    used: set[int] = set()
+    for win_i, window in enumerate(windows):
+        title = window.get("title", "")
+        for cand_i, candidate in enumerate(available):
+            if cand_i not in used and candidate.get("title") == title:
+                exact[win_i] = candidate
+                used.add(cand_i)
+                break
+
+    remaining = [candidate for i, candidate in enumerate(available)
+                 if i not in used]
+    matches = dict(exact)
+    for win_i, window in enumerate(windows):
+        if win_i in matches:
+            continue
+        target = take_best_match(window.get("title", ""), remaining)
+        if target is not None:
+            matches[win_i] = target
+    return matches, remaining
 
 
 def browser_major_version(binary: str) -> int | None:
@@ -485,31 +521,71 @@ def arm_browser_profile(app: str) -> bool:
         return False
 
 
+def browser_command(command: str, *, restore_session: bool = True,
+                    new_window: bool = False) -> str:
+    """Build a browser command without duplicating mutually exclusive flags."""
+    argv = shlex.split(command)
+    effective = skip_env_wrapper(argv)
+    if not effective:
+        return command
+    prefix = argv[:len(argv) - len(effective)]
+    boundary = next((i for i, arg in enumerate(effective) if arg == "--"), len(effective))
+    head, tail = effective[:boundary], effective[boundary:]
+    head = [arg for arg in head if arg != "--new-window"]
+    for flag in ("--restore-last-session", "--no-first-run", "--no-default-browser-check"):
+        head = [arg for arg in head if arg != flag]
+    if restore_session:
+        head.append("--restore-last-session")
+    head.extend(("--no-first-run", "--no-default-browser-check"))
+    if new_window:
+        head.append("--new-window")
+    return shlex.join(prefix + head + tail)
+
+
+def wait_for_existing_browser(app: str) -> list[dict]:
+    """Wait for an already-running browser to stop adding windows."""
+    deadline = time.monotonic() + BROWSER_TIMEOUT
+    found: list[dict] = []
+    signature: tuple[str, ...] = ()
+    last_change = time.monotonic()
+    while time.monotonic() < deadline:
+        current = [c for c in mapped() if c.get("class") == app]
+        current_signature = tuple(sorted(c["address"] for c in current))
+        found = current
+        if current_signature != signature:
+            signature = current_signature
+            last_change = time.monotonic()
+        if found and time.monotonic() - last_change >= BROWSER_QUIET:
+            return found
+        time.sleep(POLL)
+    return found
+
+
 def restore_browser(app: str, specs: list[dict], titles: list[dict],
                     claimed: set[str]) -> int:
-    """Launch the browser once, then place the windows it reopens by title."""
+    """Request native browser restore, then place the windows it provides."""
     want = len(specs)
-    print(f"[browser] {app}: {want} window(s) -- letting the browser restore them")
-    if not arm_browser_profile(app):
-        print(f"  ! no profile for {app}, falling back to per-window launch")
-        return sum(restore(s, claimed, i, want) for i, s in enumerate(specs, 1))
+    raw_cmd = specs[0].get("launch_cmd") or app
+    existing = [c for c in mapped()
+                if c.get("class") == app and c["address"] not in claimed]
+    if existing:
+        print(f"[browser] {app}: already running; preserving its current windows")
+        found = wait_for_existing_browser(app)
+        live_browser = True
+    else:
+        print(f"[browser] {app}: {want} window(s) -- requesting its saved session")
+        if not arm_browser_profile(app):
+            print(f"  ! no profile for {app}, falling back to per-window launch")
+            return sum(restore(s, claimed, i, want) for i, s in enumerate(specs, 1))
+        known = {c["address"] for c in mapped()} | claimed
+        cmd = browser_command(raw_cmd)
+        dispatch("exec_cmd", f"uwsm app -- {cmd}")
 
-    known = {c["address"] for c in mapped()} | claimed
-    cmd = specs[0].get("launch_cmd") or app
-    # Google Chrome hijacks the first launch after an install or version bump
-    # with its onboarding pages ("What's New", default-browser check) and shows
-    # those *instead of* restoring the session. Chromium does not. These flags
-    # are what keep the restore from being silently swallowed.
-    for flag in ("--no-first-run", "--no-default-browser-check"):
-        if flag not in cmd:
-            cmd = f"{cmd} {flag}"
-    dispatch("exec_cmd", f"uwsm app -- {cmd}")
-
-    # Wait for the browser to reopen what it intends to -- but stop as soon as
-    # it settles. A fixed wait burns the whole timeout whenever the browser
-    # hands back fewer windows than we saved, which is the common case after an
-    # unclean shutdown: two browsers x 40s dominated an 82s restore.
-    found = wait_for_browser(app, known, want)
+        # Wait for the browser to reopen what it intends to -- but stop as soon
+        # as it settles. A fixed wait burns the whole timeout whenever the
+        # browser hands back fewer windows than we saved.
+        found = wait_for_browser(app, known, want)
+        live_browser = False
     if not found:
         print(f"  ! {app} reopened nothing")
 
@@ -519,12 +595,13 @@ def restore_browser(app: str, specs: list[dict], titles: list[dict],
     # recorded the real title ("Hyprland Wiki"). Exact matching alone drops
     # those, so fall back to closest-match, then to leftover slots.
     wanted = [dict(t) for t in titles if t.get("class") == app]
+    matches, wanted = plan_browser_matches(found, wanted)
     placed = 0
     leftovers: list[dict] = []
 
-    for win in found:
+    for index, win in enumerate(found):
         claimed.add(win["address"])
-        target = take_best_match(win["title"], wanted)
+        target = matches.get(index)
         if target is None:
             leftovers.append(win)
             continue
@@ -539,14 +616,27 @@ def restore_browser(app: str, specs: list[dict], titles: list[dict],
     #
     # A blank placeholder window is never one of those legitimate extras -- it
     # holds no content, saved or not, so filling a slot with it would silently
-    # swap a real (just slower to appear) page for an empty one. Close it
-    # instead and leave the slot for the "open ourselves" fallback below,
-    # which at least lands the eventual replacement on the right workspace.
+    # swap a real (just slower to appear) page for an empty one. Leave it
+    # alone: a title alone is not enough evidence that the window has no
+    # background tabs, and closing it could destroy recovered browser state.
     for win in leftovers:
         if is_blank_tab(win.get("title", "")):
-            dispatch("window.close", window=f"address:{win['address']}")
-            print(f"  x closed a blank window {app} opened before its own "
-                  f"restore caught up")
+            if live_browser:
+                print(f"  ! leaving unmatched blank browser window "
+                      f"{strip_suffix(win.get('title', ''))[:40]}")
+            elif wanted:
+                target = wanted.pop(0)
+                move_to(win["address"], target["workspace"])
+                print(f"  ~ moving unmatched blank browser window "
+                      f"to ws{target['workspace']}")
+                placed += 1
+            else:
+                print(f"  ! extra blank browser window: "
+                      f"{strip_suffix(win.get('title', ''))[:40]}")
+            continue
+        if live_browser:
+            print(f"  ! leaving unmatched live browser window "
+                  f"{strip_suffix(win.get('title', ''))[:40]}")
             continue
         if wanted:
             target = wanted.pop(0)
@@ -556,17 +646,18 @@ def restore_browser(app: str, specs: list[dict], titles: list[dict],
             placed += 1
         else:
             print(f"  ! extra window the browser reopened: "
-                  f"{strip_suffix(win['title'])[:40]}")
+                  f"{strip_suffix(win.get('title', ''))[:40]}")
 
     # Whatever the browser did not hand back, open ourselves. The tabs of those
     # windows are gone -- only the browser could have restored them, and it
     # did not -- but an empty window on the right workspace preserves the shape
     # of the session, which is what the user navigates by. Leaving a hole would
     # silently shrink the desktop every time a browser exits uncleanly.
-    for target in list(wanted):
+    for target in list(wanted) if not live_browser else []:
         known_now = {c["address"] for c in mapped()} | claimed
-        dispatch("exec_cmd", f"uwsm app -- {cmd} --new-window")
-        win = find_new(known_now, WINDOW_TIMEOUT)
+        replacement = browser_command(raw_cmd, restore_session=False, new_window=True)
+        dispatch("exec_cmd", f"uwsm app -- {replacement}")
+        win = find_new(known_now, WINDOW_TIMEOUT, app)
         if win is None:
             print(f"  ! could not open a replacement window for "
                   f"ws{target['workspace']}")
@@ -723,7 +814,15 @@ def load_pair(path: Path) -> tuple[list[dict], list[dict], Path]:
 
 
 def main() -> int:
-    path = Path(sys.argv[1]) if len(sys.argv) > 1 else SESSION
+    app_filter = None
+    if len(sys.argv) > 1 and sys.argv[1] == "--app":
+        if len(sys.argv) < 3:
+            print("--app requires an app class", file=sys.stderr)
+            return 1
+        app_filter = sys.argv[2]
+        path = Path(sys.argv[3]) if len(sys.argv) > 3 else SESSION
+    else:
+        path = Path(sys.argv[1]) if len(sys.argv) > 1 else SESSION
     if not path.is_file():
         print(f"no session file at {path}", file=sys.stderr)
         return 1
@@ -733,13 +832,48 @@ def main() -> int:
         print("nothing to restore", file=sys.stderr)
         return 1
 
+    policy_skipped = False
+    if app_filter:
+        filter_classes = {app_filter}
+        if app_filter == "com.mitchellh.ghostty":
+            filter_classes.add("ghostty")
+        windows = [w for w in windows if w.get("app_id", "") in filter_classes]
+        titles = [t for t in titles if t.get("class", "") in filter_classes]
+        if not windows:
+            print(f"no saved windows for {app_filter}", file=sys.stderr)
+            return 1
+    elif os.environ.get("OMASESSION_APP_RESTORE_GHOSTTY", "true") == "false":
+        ghostty_classes = {"com.mitchellh.ghostty", "ghostty"}
+        skipped = sum(1 for w in windows if w.get("app_id", "") in ghostty_classes)
+        if skipped:
+            policy_skipped = True
+            windows = [w for w in windows if w.get("app_id", "") not in ghostty_classes]
+            titles = [t for t in titles if t.get("class", "") not in ghostty_classes]
+            print(f"skipping {skipped} Ghostty window(s): appRestoreGhostty=false")
+
+    if not windows:
+        if policy_skipped:
+            print("nothing to restore: all saved windows excluded by appRestoreGhostty=false")
+            return 0
+        print("nothing to restore", file=sys.stderr)
+        return 1
+
     print(f"restoring {len(windows)} window(s) from {path}\n")
 
+    embedded_titles = [
+        {
+            "class": spec.get("app_id", ""),
+            "title": spec.get("title", ""),
+            "workspace": spec.get("workspace"),
+        }
+        for spec in windows if spec.get("title")
+    ]
+    title_records = titles or embedded_titles
     browser_specs: dict[str, list[dict]] = {}
     plain: list[dict] = []
     for spec in windows:
         app = spec.get("app_id", "")
-        if app in BROWSERS and titles:
+        if app in BROWSERS:
             browser_specs.setdefault(app, []).append(spec)
         else:
             plain.append(spec)
@@ -748,7 +882,7 @@ def main() -> int:
     started = time.monotonic()
     ok = 0
     for app, specs in browser_specs.items():
-        ok += restore_browser(app, specs, titles, claimed)
+        ok += restore_browser(app, specs, title_records, claimed)
     for i, spec in enumerate(plain, start=1):
         ok += restore(spec, claimed, i, len(plain))
     elapsed = time.monotonic() - started
@@ -765,5 +899,62 @@ def main() -> int:
     return 0 if ok == len(windows) else 2
 
 
+def run_logged() -> int:
+    """Persist restore diagnostics without making logging a restore failure."""
+    state_dir = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "omasession"
+    log_fd: int | None = None
+    log_failed = False
+    real_stderr = sys.stderr
+    chunks = [time.strftime("Restore started %Y-%m-%d %H:%M:%S %Z\n")]
+
+    try:
+        log_fd = open_dir_chain(str(state_dir), create=True)
+    except (OSError, Refused, TooLarge) as exc:
+        real_stderr.write(f"[omasession] restore log unavailable: {exc}\n")
+        real_stderr.flush()
+
+    def publish() -> None:
+        nonlocal log_fd, log_failed
+        if log_fd is None or log_failed:
+            return
+        try:
+            write_bytes(log_fd, "last-restore.log", "".join(chunks).encode(), mode=0o600)
+        except (OSError, Refused, TooLarge) as exc:
+            log_failed = True
+            os.close(log_fd)
+            log_fd = None
+            real_stderr.write(f"[omasession] restore log disabled: {exc}\n")
+            real_stderr.flush()
+
+    publish()
+
+    class Tee:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def write(self, text):
+            self.stream.write(text)
+            self.stream.flush()
+            chunks.append(text)
+            if "\n" in text:
+                publish()
+            return len(text)
+
+        def flush(self):
+            self.stream.flush()
+
+    try:
+        with contextlib.redirect_stdout(Tee(sys.stdout)), contextlib.redirect_stderr(Tee(sys.stderr)):
+            try:
+                return main()
+            except Exception:
+                traceback.print_exc()
+                return 1
+    finally:
+        publish()
+        if log_fd is not None:
+            os.close(log_fd)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run_logged())

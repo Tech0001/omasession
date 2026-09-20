@@ -46,13 +46,18 @@ Panel {
 
   readonly property string cliPath:
     Quickshell.env("HOME") + "/.config/omarchy/plugins/brenoperucchi.omasession/bin/omasession"
-  readonly property string pluginVersion: "0.3.0"
+  readonly property string pluginVersion: "0.3.1"
 
   readonly property var mock: ({
     "healthy": {
       "windows": 4, "workspaces": 4, "agoSec": 42, "refused": false, "detail": "",
       "intervalSec": 30, "restoreOnLogin": true, "browserRepair": true,
       "browserRepairChrome": true,
+      "appRestoreGhostty": true,
+      "appAvailability": {
+        "googleChrome": { "installed": true, "captured": false },
+        "ghostty": { "installed": true, "captured": false }
+      },
       "captured": [
         { "ws": 1, "mon": "DP-1", "cls": "foot",                 "app": "Foot",     "title": "~/Devs/my project",  "detail": "~/Devs/my project", "warn": "", "resolvable": true },
         { "ws": 2, "mon": "DP-1", "cls": "org.gnome.Nautilus",   "app": "Files",    "title": "Home",               "detail": "", "warn": "", "resolvable": true },
@@ -65,6 +70,11 @@ Panel {
       "detail": "partial save blocked: 1 window written, 4 on screen",
       "intervalSec": 30, "restoreOnLogin": true, "browserRepair": true,
       "browserRepairChrome": true,
+      "appRestoreGhostty": true,
+      "appAvailability": {
+        "googleChrome": { "installed": true, "captured": false },
+        "ghostty": { "installed": true, "captured": false }
+      },
       "captured": [
         { "ws": 1, "mon": "DP-1", "cls": "foot",                 "app": "Foot",     "title": "~/Devs/my project",  "detail": "~/Devs/my project", "warn": "", "resolvable": true },
         { "ws": 2, "mon": "DP-1", "cls": "org.gnome.Nautilus",   "app": "Files",    "title": "Home",               "detail": "", "warn": "", "resolvable": true },
@@ -82,6 +92,9 @@ Panel {
   property string lastError: ""
   property string browserRestoreOutput: ""
   property string browserRestoreError: ""
+  property string ghosttyRestoreOutput: ""
+  property string ghosttyRestoreError: ""
+  property var appRestoreGhosttyOverride: null
   property var realStatus: null
 
   readonly property var status: mockMode ? mock[scenario] : realStatus
@@ -155,7 +168,7 @@ Panel {
 
   Process {
     id: browserRestoreProc
-    command: [root.cliPath, "restore-browser", "google-chrome"]
+    command: [root.cliPath, "restore-app", "google-chrome"]
     stdout: StdioCollector {
       id: browserRestoreStdout
       waitForEnd: true
@@ -172,6 +185,29 @@ Panel {
       var lines = (error || output).split("\n").filter(function(line) { return line.trim() !== "" })
       root.browserRestoreError = code === 0 ? "" : (lines.length > 0 ? lines[lines.length - 1] : "Chrome restore failed (exit " + code + ")")
       root.browserRestoreOutput = code === 0 ? (lines.length > 0 ? lines[lines.length - 1] : "Chrome windows restored") : ""
+      root.refresh()
+    }
+  }
+
+  Process {
+    id: ghosttyRestoreProc
+    command: [root.cliPath, "restore-app", "ghostty"]
+    stdout: StdioCollector {
+      id: ghosttyRestoreStdout
+      waitForEnd: true
+      onStreamFinished: root.ghosttyRestoreOutput = String(text || "").trim()
+    }
+    stderr: StdioCollector {
+      id: ghosttyRestoreStderr
+      waitForEnd: true
+      onStreamFinished: root.ghosttyRestoreError = String(text || "").trim()
+    }
+    onExited: function(code) {
+      var output = String(ghosttyRestoreStdout.text || root.ghosttyRestoreOutput || "").trim()
+      var error = String(ghosttyRestoreStderr.text || root.ghosttyRestoreError || "").trim()
+      var lines = (error || output).split("\n").filter(function(line) { return line.trim() !== "" })
+      root.ghosttyRestoreError = code === 0 ? "" : (lines.length > 0 ? lines[lines.length - 1] : "Ghostty restore failed (exit " + code + ")")
+      root.ghosttyRestoreOutput = code === 0 ? (lines.length > 0 ? lines[lines.length - 1] : "Ghostty windows restored") : ""
       root.refresh()
     }
   }
@@ -194,6 +230,16 @@ Panel {
     }
   }
 
+  Process {
+    id: ghosttyRestoreConfigProc
+    command: [root.cliPath, "config", "set", "appRestoreGhostty", ghosttyRestoreValue]
+    property string ghosttyRestoreValue: "true"
+    onExited: function(code) {
+      root.appRestoreGhosttyOverride = null
+      root.refresh()
+    }
+  }
+
   function setRestoreOnLogin(on) {
     configProc.key = "restoreOnLogin"
     configProc.value = on ? "true" : "false"
@@ -203,6 +249,11 @@ Panel {
   function setBrowserRepairChrome(on) {
     browserRepairProc.browserRepairValue = on ? "true" : "false"
     browserRepairProc.running = true
+  }
+
+  function setAppRestoreGhostty(on) {
+    ghosttyRestoreConfigProc.ghosttyRestoreValue = on ? "true" : "false"
+    ghosttyRestoreConfigProc.running = true
   }
 
   Component.onCompleted: refresh()
@@ -277,6 +328,22 @@ Panel {
                                              ? browserRepairChromeOverride
                                              : (status && status.browserRepairChrome !== undefined
                                                 ? status.browserRepairChrome : true)
+  readonly property var appAvailability: status && status.appAvailability !== undefined
+                                          ? status.appAvailability
+                                          : ({
+                                              googleChrome: { installed: true, captured: true },
+                                              ghostty: { installed: true, captured: true }
+                                            })
+  readonly property var googleChromeAvailability: appAvailability.googleChrome || ({ installed: true, captured: true })
+  readonly property var ghosttyAvailability: appAvailability.ghostty || ({ installed: true, captured: true })
+  readonly property bool chromeInstalled: !!googleChromeAvailability.installed
+  readonly property bool chromeCaptured: !!googleChromeAvailability.captured
+  readonly property bool ghosttyInstalled: !!ghosttyAvailability.installed
+  readonly property bool ghosttyCaptured: !!ghosttyAvailability.captured
+  readonly property bool appRestoreGhostty: appRestoreGhosttyOverride !== null
+                                             ? appRestoreGhosttyOverride
+                                             : (status && status.appRestoreGhostty !== undefined
+                                                ? status.appRestoreGhostty : true)
   readonly property bool attention:    guardRefused
 
   readonly property color fg: bar ? bar.foreground : Color.foreground
@@ -643,73 +710,161 @@ Panel {
                   font.pixelSize: Style.font.caption
                 }
 
-                // The manual action and the automatic browser-repair setting
-                // share one row. Turning automation off does not remove the
-                // explicit button: it only stops the background placement
-                // after Chrome itself restarts.
-                Item {
-                  id: chromeControls
+                // Each app owns its action and setting. Availability comes
+                // from the CLI's system detection; a closed app stays
+                // selectable, while an app that is not installed is visibly
+                // disabled instead of silently disappearing.
+                Row {
+                  id: appCards
                   width: parent.width
-                  height: Math.max(chromeRestoreButton.implicitHeight,
-                                   chromeToggle.implicitHeight)
+                  spacing: Style.spacing.sm
 
-                  BorderSurface {
-                    id: chromeCard
-                    anchors.fill: parent
-                    color: "transparent"
-                    borderSpec: Border.controlSpec("normal", root.fg, Color.accent)
-                    radius: Style.cornerRadius
-                  }
+                  Item {
+                    id: chromeControls
+                    width: (appCards.width - appCards.spacing) / 2
+                    height: Style.space(54)
 
-                  Button {
-                    id: chromeRestoreButton
-                    anchors.left: chromeToggle.right
-                    anchors.right: parent.right
-                    anchors.rightMargin: Style.spacing.md
-                    anchors.leftMargin: Style.spacing.md
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "Google Chrome"
-                    iconText: ""
-                    tooltipText: browserRestoreProc.running
-                                  ? "Restoring Chrome windows…"
-                                  : "Move open Chrome windows to saved workspaces"
-                    bordered: false
-                    focusable: true
-                    enabled: !root.mockMode && !root.cliMissing
-                             && !browserRestoreProc.running
-                             && !restoreProc.running && !saveProc.running
-                    onClicked: {
-                      root.browserRestoreOutput = ""
-                      root.browserRestoreError = ""
-                      browserRestoreProc.running = true
+                    BorderSurface {
+                      anchors.fill: parent
+                      color: "transparent"
+                      borderSpec: Border.controlSpec("normal", root.fg, Color.accent)
+                      radius: Style.cornerRadius
+                    }
+
+                    Button {
+                      id: chromeRestoreButton
+                      anchors.left: chromeToggle.right
+                      anchors.right: parent.right
+                      anchors.rightMargin: Style.spacing.sm
+                      anchors.leftMargin: Style.spacing.xs
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: "Google Chrome"
+                      iconText: ""
+                      tooltipText: !root.chromeInstalled
+                                    ? "Google Chrome is not installed"
+                                    : !root.chromeCaptured
+                                    ? "Google Chrome is not in the saved snapshot"
+                                    : browserRestoreProc.running
+                                    ? "Restoring Chrome windows…"
+                                    : "Restore Chrome windows and saved tabs"
+                      bordered: false
+                      focusable: true
+                      enabled: !root.mockMode && !root.cliMissing
+                               && root.chromeInstalled && root.chromeCaptured
+                               && !browserRestoreProc.running && !ghosttyRestoreProc.running
+                               && !restoreProc.running && !saveProc.running
+                      onClicked: {
+                        root.browserRestoreOutput = ""
+                        root.browserRestoreError = ""
+                        root.ghosttyRestoreOutput = ""
+                        root.ghosttyRestoreError = ""
+                        browserRestoreProc.running = true
+                      }
+                    }
+
+                    ToggleSwitch {
+                      id: chromeToggle
+                      anchors.left: parent.left
+                      anchors.leftMargin: Style.spacing.sm
+                      anchors.verticalCenter: parent.verticalCenter
+                      checked: root.chromeInstalled && root.browserRepair && root.browserRepairChrome
+                      busy: browserRepairProc.running
+                      enabled: !root.mockMode && !root.cliMissing
+                               && root.chromeInstalled && root.browserRepair
+                               && !browserRepairProc.running
+                      foreground: root.fg
+                      cursorRing: false
+                      onToggled: {
+                        if (root.mockMode) return
+                        var next = !root.browserRepairChrome
+                        root.browserRepairChromeOverride = next
+                        root.setBrowserRepairChrome(next)
+                      }
+
+                      PanelToolTip {
+                        visible: chromeToggle.containsMouse
+                        fontFamily: Style.font.family
+                        text: !root.chromeInstalled
+                              ? "Google Chrome is not installed"
+                              : !root.browserRepair
+                              ? "Automatic browser restoration is disabled globally"
+                              : root.browserRepairChrome
+                              ? "Automatically restore Chrome windows after a browser restart"
+                              : "Automatic Chrome window restoration is off"
+                      }
                     }
                   }
 
-                  ToggleSwitch {
-                    id: chromeToggle
-                    anchors.left: parent.left
-                    anchors.leftMargin: Style.spacing.sm
-                    anchors.verticalCenter: parent.verticalCenter
-                    checked: root.browserRepair && root.browserRepairChrome
-                    busy: browserRepairProc.running
-                    enabled: root.browserRepair && !browserRepairProc.running
-                    foreground: root.fg
-                    cursorRing: false
-                    onToggled: {
-                      if (root.mockMode) return
-                      var next = !root.browserRepairChrome
-                      root.browserRepairChromeOverride = next
-                      root.setBrowserRepairChrome(next)
+                  Item {
+                    id: ghosttyControls
+                    width: (appCards.width - appCards.spacing) / 2
+                    height: Style.space(54)
+
+                    BorderSurface {
+                      anchors.fill: parent
+                      color: "transparent"
+                      borderSpec: Border.controlSpec("normal", root.fg, Color.accent)
+                      radius: Style.cornerRadius
                     }
 
-                    PanelToolTip {
-                      visible: chromeToggle.containsMouse
-                      fontFamily: Style.font.family
-                      text: !root.browserRepair
-                            ? "Automatic browser restoration is disabled globally"
-                            : root.browserRepairChrome
-                            ? "Automatically restore Chrome windows after a browser restart"
-                            : "Automatic Chrome window restoration is off"
+                    Button {
+                      id: ghosttyRestoreButton
+                      anchors.left: ghosttyToggle.right
+                      anchors.right: parent.right
+                      anchors.rightMargin: Style.spacing.sm
+                      anchors.leftMargin: Style.spacing.xs
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: "Ghostty"
+                      iconText: ""
+                      tooltipText: !root.ghosttyInstalled
+                                    ? "Ghostty is not installed"
+                                    : !root.ghosttyCaptured
+                                    ? "Ghostty is not in the saved snapshot"
+                                    : ghosttyRestoreProc.running
+                                    ? "Restoring Ghostty windows…"
+                                    : "Restore Ghostty windows to saved workspaces"
+                      bordered: false
+                      focusable: true
+                      enabled: !root.mockMode && !root.cliMissing
+                               && root.ghosttyInstalled && root.ghosttyCaptured
+                               && !ghosttyRestoreProc.running && !browserRestoreProc.running
+                               && !restoreProc.running && !saveProc.running
+                      onClicked: {
+                        root.browserRestoreOutput = ""
+                        root.browserRestoreError = ""
+                        root.ghosttyRestoreOutput = ""
+                        root.ghosttyRestoreError = ""
+                        ghosttyRestoreProc.running = true
+                      }
+                    }
+
+                    ToggleSwitch {
+                      id: ghosttyToggle
+                      anchors.left: parent.left
+                      anchors.leftMargin: Style.spacing.sm
+                      anchors.verticalCenter: parent.verticalCenter
+                      checked: root.ghosttyInstalled && root.appRestoreGhostty
+                      busy: ghosttyRestoreConfigProc.running
+                      enabled: !root.mockMode && !root.cliMissing
+                               && root.ghosttyInstalled && !ghosttyRestoreConfigProc.running
+                      foreground: root.fg
+                      cursorRing: false
+                      onToggled: {
+                        if (root.mockMode) return
+                        var next = !root.appRestoreGhostty
+                        root.appRestoreGhosttyOverride = next
+                        root.setAppRestoreGhostty(next)
+                      }
+
+                      PanelToolTip {
+                        visible: ghosttyToggle.containsMouse
+                        fontFamily: Style.font.family
+                        text: !root.ghosttyInstalled
+                              ? "Ghostty is not installed"
+                              : root.appRestoreGhostty
+                              ? "Restore Ghostty on the next login or session restore"
+                              : "Automatic Ghostty restoration is off"
+                      }
                     }
                   }
                 }
@@ -717,7 +872,13 @@ Panel {
                 Text {
                   width: parent.width
                   wrapMode: Text.WordWrap
-                  text: "Moves open Chrome windows to their saved workspaces."
+                  text: (!root.chromeInstalled ? "Chrome unavailable"
+                        : root.chromeCaptured ? "Chrome saved"
+                        : "Chrome not in snapshot")
+                        + "  ·  "
+                        + (!root.ghosttyInstalled ? "Ghostty unavailable"
+                           : root.ghosttyCaptured ? "Ghostty saved"
+                           : "Ghostty not in snapshot")
                   color: root.dim
                   font.family: Style.font.family
                   font.pixelSize: Style.font.caption
@@ -726,18 +887,14 @@ Panel {
                 Text {
                   width: parent.width
                   visible: root.browserRestoreOutput !== "" || root.browserRestoreError !== ""
+                            || root.ghosttyRestoreOutput !== "" || root.ghosttyRestoreError !== ""
                   wrapMode: Text.WordWrap
-                  text: root.browserRestoreError !== ""
-                        ? root.browserRestoreError : root.browserRestoreOutput
-                  color: root.browserRestoreError !== "" ? Color.urgent : root.dim
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.caption
-                }
-
-                Text {
-                  width: parent.width
-                  text: "More applications can be added here."
-                  color: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.45)
+                  text: root.browserRestoreError !== "" ? root.browserRestoreError
+                        : root.ghosttyRestoreError !== "" ? root.ghosttyRestoreError
+                        : root.browserRestoreOutput !== "" ? root.browserRestoreOutput
+                        : root.ghosttyRestoreOutput
+                  color: (root.browserRestoreError !== "" || root.ghosttyRestoreError !== "")
+                         ? Color.urgent : root.dim
                   font.family: Style.font.family
                   font.pixelSize: Style.font.caption
                 }

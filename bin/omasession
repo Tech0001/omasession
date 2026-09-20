@@ -5,6 +5,7 @@
 #   omasession restore [name]     replay it into the compositor
 #   omasession restore-browser [app]  move an existing browser's windows
 #                                 (--if-enabled: só se restoreOnLogin estiver on)
+#   omasession restore-app [app]     restore one app from the saved session
 #   omasession status [--json]    what was captured, when, and what is wrong
 #   omasession resolve [--json]   which command each open window resolves to
 #   omasession install            timer, login restore, browser policy
@@ -168,6 +169,7 @@ DEFAULT_RESTORE_ON_LOGIN=true
 DEFAULT_BROWSER_RESTORE=true
 DEFAULT_BROWSER_REPAIR=true
 DEFAULT_BROWSER_REPAIR_CHROME=true
+DEFAULT_APP_RESTORE_GHOSTTY=true
 
 config_get() { # config_get <key> <default> [raw_json]
     # $3, quando dado, poupa uma leitura de config.json que quem chama já fez
@@ -283,7 +285,10 @@ cmd_restore() {
     if [[ "$(config_get browserRestore "$DEFAULT_BROWSER_RESTORE")" == "false" ]]; then
         err "browserRestore=false ainda nao e respeitado; os browsers vao reabrir suas janelas"
     fi
-    exec python3 "$LIB/replay.py" "$SESSION_DIR/$name.toml"
+    local restore_ghostty
+    restore_ghostty="$(config_get appRestoreGhostty "$DEFAULT_APP_RESTORE_GHOSTTY")"
+    OMASESSION_APP_RESTORE_GHOSTTY="$restore_ghostty" \
+        exec python3 "$LIB/replay.py" "$SESSION_DIR/$name.toml"
 }
 
 # ── restore-browser ─────────────────────────────────────────────────────────
@@ -331,6 +336,32 @@ cmd_restore_browser() {
         fi
         die "browser placement repair failed (rc=$rc): ${detail:-no detail} -- saved snapshot unchanged"
     fi
+}
+
+# ── restore-app ─────────────────────────────────────────────────────────────
+# App-only actions share the same saved snapshot and lock as the full restore.
+# Both Chrome and Ghostty use replay.py's app filter; restore-browser remains
+# the separate repair path for moving windows that are already open.
+cmd_restore_app() {
+    local app="$*" filter
+    case "$app" in
+        google-chrome) filter="google-chrome" ;;
+        ghostty) filter="com.mitchellh.ghostty" ;;
+        *) die "unsupported app: ${app:-<none>} (try google-chrome or ghostty)" ;;
+    esac
+    hypr_env || die "no Hyprland instance -- nothing to restore into"
+    [[ -f "$SESSION_DIR/last.toml" ]] || die "no saved session at $SESSION_DIR/last.toml"
+    if ! : 2>/dev/null >&9; then
+        exec /usr/bin/python3 "$SAFE_FS" exec-with-lock \
+            "$SESSION_DIR" ".last.lock" 9 -- bash "${BASH_SOURCE[0]}" \
+            restore-app "$app"
+    fi
+    if ! flock -n 9; then
+        die "another save or restore is already running"
+    fi
+    exec env OMASESSION_APP_RESTORE_GHOSTTY=true \
+        python3 "$LIB/replay.py" --app "$filter" \
+        "$SESSION_DIR/last.toml"
 }
 
 # ── status ───────────────────────────────────────────────────────────────────
@@ -393,6 +424,40 @@ status_json() {
     local timer="inactive"
     systemctl --user is-active --quiet omasession-snapshot.timer 2>/dev/null && timer="active"
 
+    # Use the same pair-selection rules as replay.py for app membership. The
+    # sidecar is presentation data and may be absent even when a valid TOML
+    # still carries launchable windows (or may belong to a previous generation).
+    local effective_apps='{}'
+    effective_apps="$(python3 - "$toml" "$LIB" 2>/dev/null <<'PY'
+import contextlib
+import io
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[2])
+import replay
+
+with contextlib.redirect_stdout(io.StringIO()):
+    windows, _titles, _sidecar = replay.load_pair(Path(sys.argv[1]))
+counts = {}
+for window in windows:
+    app = window.get("app_id", "")
+    if app:
+        counts[app] = counts.get(app, 0) + 1
+print(json.dumps(counts))
+PY
+)" || effective_apps='{}'
+
+    local chrome_installed=false ghostty_installed=false
+    command -v google-chrome-stable >/dev/null 2>&1 && chrome_installed=true
+    command -v ghostty >/dev/null 2>&1 && ghostty_installed=true
+    local chrome_captured=false ghostty_captured=false
+    jq -e '(.["google-chrome"] // 0) > 0' >/dev/null 2>&1 <<<"$effective_apps" \
+        && chrome_captured=true
+    jq -e '((.["com.mitchellh.ghostty"] // 0) + (.ghostty // 0)) > 0' \
+        >/dev/null 2>&1 <<<"$effective_apps" && ghostty_captured=true
+
     local cfg_raw cfg_rc
     cfg_raw="$(safe_read "$CONFIG_DIR" config.json)" && cfg_rc=0 || cfg_rc=$?
     # rc==4 aceito aqui também, mesmo motivo do save_state acima.
@@ -414,11 +479,19 @@ status_json() {
         --argjson restoreOnLogin "$(config_get restoreOnLogin "$DEFAULT_RESTORE_ON_LOGIN" "$cfg_raw")" \
         --argjson browserRepair "$(config_get browserRepair "$DEFAULT_BROWSER_REPAIR" "$cfg_raw")" \
         --argjson browserRepairChrome "$(config_get browserRepairChrome "$DEFAULT_BROWSER_REPAIR_CHROME" "$cfg_raw")" \
+        --argjson appRestoreGhostty "$(config_get appRestoreGhostty "$DEFAULT_APP_RESTORE_GHOSTTY" "$cfg_raw")" \
+        --argjson chromeInstalled "$chrome_installed" \
+        --argjson chromeCaptured "$chrome_captured" \
+        --argjson ghosttyInstalled "$ghostty_installed" \
+        --argjson ghosttyCaptured "$ghostty_captured" \
         '{windows:$windows, workspaces:$workspaces, agoSec:$agoSec,
           refused:$refused, detail:$detail,
           captured:$captured, lastSave:$lastSave, timer:$timer,
           intervalSec:$intervalSec, restoreOnLogin:$restoreOnLogin,
           browserRepair:$browserRepair, browserRepairChrome:$browserRepairChrome,
+          appRestoreGhostty:$appRestoreGhostty,
+          appAvailability:{googleChrome:{installed:$chromeInstalled,captured:$chromeCaptured},
+                            ghostty:{installed:$ghosttyInstalled,captured:$ghosttyCaptured}},
           session:$session, usingFallback:$fallback, notes:$notes}'
 }
 
@@ -778,7 +851,8 @@ cmd_install() {
               --argjson b "$DEFAULT_BROWSER_RESTORE" \
               --argjson br "$DEFAULT_BROWSER_REPAIR" \
               --argjson brc "$DEFAULT_BROWSER_REPAIR_CHROME" \
-              '{saveIntervalSec:$i, restoreOnLogin:$r, browserRestore:$b, browserRepair:$br, browserRepairChrome:$brc}')" \
+              --argjson agh "$DEFAULT_APP_RESTORE_GHOSTTY" \
+              '{saveIntervalSec:$i, restoreOnLogin:$r, browserRestore:$b, browserRepair:$br, browserRepairChrome:$brc, appRestoreGhostty:$agh}')" \
             || die "could not build default config"
         printf '%s\n' "$defaults" | safe_write "$CONFIG_DIR" config.json
         say "config written to $CONFIG"
@@ -952,6 +1026,7 @@ case "${1:-}" in
     save)      shift; cmd_save "$@" ;;
     restore)   shift; cmd_restore "$@" ;;
     restore-browser) shift; cmd_restore_browser "$@" ;;
+    restore-app) shift; cmd_restore_app "$@" ;;
     status)    shift; cmd_status "$@" ;;
     resolve)   shift; cmd_resolve "$@" ;;
     install)   shift; cmd_install "$@" ;;
